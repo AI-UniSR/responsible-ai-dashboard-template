@@ -1,0 +1,132 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+
+experiment_name: e2e-test-rai-survival
+type: pipeline
+display_name: "E2E Test - RAI Survival Pipeline"
+description: >
+  End-to-end test pipeline for validating RAI components compatibility with survival models.
+  Generates synthetic data, trains a survival model, and runs the full RAI analysis pipeline.
+
+settings:
+  default_compute: azureml:clusterprdwe-ogreif
+
+inputs:
+  # Model configuration
+  model_name: "e2e-test-survival-model"
+  
+  # Survival analysis parameters
+  time_column: tte
+  event_column: event
+  time_horizon: 12
+  binary_label_name: 'label'
+  
+  # Data generation parameters
+  n_samples: 500
+  test_size: 0.3
+  random_state: 42
+  
+  # Missing value handling (for testing)
+  missing_value_columns: "age,bmi,biomarker_1,biomarker_2"
+  missing_value_fraction: 0.15
+  remove_missing: "all"
+
+jobs:
+  # ============================================================================
+  # Step 1: Generate synthetic assets (data + model + threshold)
+  # ============================================================================
+  prepare_e2e_survival_assets:
+    type: command
+    component: prepare_e2e_survival_assets/component.yml
+    inputs:
+      model_name: ${{parent.inputs.model_name}}
+      time_horizon: ${{parent.inputs.time_horizon}}
+      n_samples: ${{parent.inputs.n_samples}}
+      test_size: ${{parent.inputs.test_size}}
+      random_state: ${{parent.inputs.random_state}}
+      missing_value_columns: ${{parent.inputs.missing_value_columns}}
+      missing_value_fraction: ${{parent.inputs.missing_value_fraction}}
+      remove_missing: ${{parent.inputs.remove_missing}}
+    outputs:
+      train_data:
+        type: mltable
+      test_data:
+        type: mltable
+      model_info_path:
+        type: uri_folder
+      test_assets:
+        type: uri_folder
+
+  # ============================================================================
+  # Step 2: Prepare model and data for RAI (survival -> classification wrapper)
+  # ============================================================================
+  prepare_model_and_data_for_rai:
+    type: command
+    component: ../components/prepare_model_and_data_for_rai/component.yml
+    inputs:
+      model_name: ${{parent.inputs.model_name}}
+      # Read model version dynamically from previous step
+      model_info_path_input: ${{parent.jobs.prepare_e2e_survival_assets.outputs.model_info_path}}
+      binary_label_name: ${{parent.inputs.binary_label_name}}
+      time_column: ${{parent.inputs.time_column}}
+      event_column: ${{parent.inputs.event_column}}
+      time_horizon: ${{parent.inputs.time_horizon}}
+      train_data: ${{parent.jobs.prepare_e2e_survival_assets.outputs.train_data}}
+      test_data: ${{parent.jobs.prepare_e2e_survival_assets.outputs.test_data}}
+      # Pass test_assets with threshold (66th percentile) from previous step
+      test_assets: ${{parent.jobs.prepare_e2e_survival_assets.outputs.test_assets}}
+      # Test missing value handling - remove all rows with any missing value
+      remove_missing: "all"
+    outputs:
+      train_data_out:
+        type: mltable
+      test_data_out:
+        type: mltable
+      model_info_path:
+
+  # ============================================================================
+  # Step 3: Create RAI Insights Dashboard
+  # ============================================================================
+  create_rai_job:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_insight_constructor/versions/0.21.0
+    limits:
+      timeout: 3600
+    inputs:
+      title: "E2E Test - RAI Survival Dashboard"
+      task_type: classification
+      model_info_path: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.model_info_path}}
+      train_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.train_data_out}}
+      test_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.test_data_out}}
+      target_column_name: ${{parent.inputs.binary_label_name}}
+      # Categorical columns: sex (0/1) and tumor (0/1/2)
+      categorical_column_names: '["sex", "tumor"]'
+      classes: '[false, true]'
+      # Required for scikit-survival models
+      use_model_dependency: true
+    outputs:
+      rai_insights_dashboard:
+
+  # ============================================================================
+  # Step 4: Error Analysis
+  # ============================================================================
+  error_analysis:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_erroranalysis/versions/0.21.0
+    limits:
+      timeout: 7200
+    inputs:
+      rai_insights_dashboard: ${{parent.jobs.create_rai_job.outputs.rai_insights_dashboard}}
+      max_depth: 3
+      filter_features: '[]'
+
+  # ============================================================================
+  # Step 5: Gather all insights
+  # ============================================================================
+  gather_insights:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.21.0
+    limits:
+      timeout: 7200
+    inputs:
+      constructor: ${{parent.jobs.create_rai_job.outputs.rai_insights_dashboard}}
+      insight_1: ${{parent.jobs.error_analysis.outputs.error_analysis}}

@@ -1,0 +1,85 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+
+experiment_name: responsible-ai-dashboard
+type: pipeline
+display_name: "Responsible AI Dashboard"
+
+settings:
+  default_compute: azureml:clusterprdwe-qdtyf6
+
+inputs:
+  target_column_name: event
+  # Model details -- insert your model name and version here
+  model_name: "temp-rai-added-feature"
+  model_version: 1
+  # Insert your binary label name here
+  binary_label_name: 'event'
+  # Datasets -- insert your dataset names and versions here
+  # uri_file or uri_folder or mltable
+
+  training_data:
+    type: mltable
+    path: "azureml:retrain_ml_table@latest"
+  test_data:
+    type: uri_file
+    path: "azureml:processed-prospective-cohort@latest"
+  # Add any extra features you want to include in RAI analysis here
+  extra_features: '["sex", "tumor"]'
+
+jobs:
+  prepare_model_and_data_for_rai:
+    type: command
+    component: components/prepare_model_and_data_for_rai/component.yml
+    inputs:
+      model_name: ${{parent.inputs.model_name}}
+      model_version: ${{parent.inputs.model_version}}
+      binary_label_name: ${{parent.inputs.binary_label_name}}
+      train_data: ${{parent.inputs.training_data}}
+      test_data: ${{parent.inputs.test_data}}
+      extra_features: ${{parent.inputs.extra_features}}  # ← Aggiungere questa riga
+
+    outputs:
+      train_data_out:
+        type: mltable
+      test_data_out:
+        type: mltable
+      model_info_path:
+
+  create_rai_job_dev:
+      type: command
+      component: azureml://registries/azureml/components/rai_tabular_insight_constructor/versions/0.21.0
+      limits:
+        timeout: 3600
+      inputs:
+        title: Responsible AI Dashboard - UC3
+        task_type: classification
+        model_info_path: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.model_info_path}}
+        train_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.train_data_out}}
+        test_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.test_data_out}}
+        target_column_name: ${{parent.inputs.binary_label_name}}
+        categorical_column_names: '["sex", "tumor"]'
+        classes: '[false, true]'
+        # Set to true for using not-standard model libraries (e.g., XGBoost, Survival models, etc.)
+        use_model_dependency: False
+
+      outputs:
+        rai_insights_dashboard:
+
+  error_analysis_dev:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_erroranalysis/versions/0.21.0
+    limits:
+      timeout: 7200
+    inputs:
+      rai_insights_dashboard: ${{parent.jobs.create_rai_job_dev.outputs.rai_insights_dashboard}}
+      max_depth: 3
+      filter_features: '[]'
+      
+  gather_01:
+      type: command
+      component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.21.0
+      limits:
+        timeout: 7200
+      inputs:
+        constructor: ${{parent.jobs.create_rai_job_dev.outputs.rai_insights_dashboard}}
+        insight_1: ${{parent.jobs.error_analysis_dev.outputs.error_analysis}}

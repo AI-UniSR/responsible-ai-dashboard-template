@@ -1,0 +1,87 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+
+experiment_name: responsible-ai-dashboard
+type: pipeline
+display_name: "Responsible AI Dashboard (Survival Model)"
+
+settings:
+  default_compute: azureml:clusterprdwe-u6nir2
+
+inputs:
+  target_column_name: event
+  # Model details -- insert your model name and version here
+  model_name: "dev-rai-model"
+  model_version: 4
+  # Survival analysis specific inputs (Optional)
+  time_column: tte
+  event_column: event
+  time_horizon: 12
+  # Insert your binary label name here
+  binary_label_name: 'label'
+
+  # Datasets -- insert your dataset names and versions here
+  dev_training_data:
+    type: uri_folder
+    path: azureml:dev-rai-dataset:1
+
+  dev_test_data:
+    type: uri_folder
+    path: azureml:dev-rai-dataset:1
+
+jobs:
+  prepare_model_and_data_for_rai:
+    type: command
+    component: components/prepare_model_and_data_for_rai/component.yml
+    inputs:
+      model_name: ${{parent.inputs.model_name}}
+      model_version: ${{parent.inputs.model_version}}
+      binary_label_name: ${{parent.inputs.binary_label_name}}
+      time_column: ${{parent.inputs.time_column}}
+      event_column: ${{parent.inputs.event_column}}
+      time_horizon: ${{parent.inputs.time_horizon}}
+      train_data: ${{parent.inputs.dev_training_data}}
+      test_data: ${{parent.inputs.dev_test_data}}
+    outputs:
+      train_data_out:
+        type: mltable
+      test_data_out:
+        type: mltable
+      model_info_path:
+
+  create_rai_job_dev:
+      type: command
+      component: azureml://registries/azureml/components/rai_tabular_insight_constructor/versions/0.21.0
+      limits:
+        timeout: 3600
+      inputs:
+        title: "Responsible AI Dashboard (Survival Model)"
+        task_type: classification
+        model_info_path: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.model_info_path}}
+        train_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.train_data_out}}
+        test_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.test_data_out}}
+        target_column_name: ${{parent.inputs.binary_label_name}}
+        categorical_column_names: '["sex", "albumin bin", "bilirubin bin", "ast bin", "alt bin", "thyroid_measured", "prc_measured", "liver mets", "bone mets", "lung mets", "lymph mets", "other mets", "peri mets", "surgery"]'
+        classes: '[false, true]'
+        use_model_dependency: true
+
+      outputs:
+        rai_insights_dashboard:
+
+  error_analysis_dev:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_erroranalysis/versions/0.21.0
+    limits:
+      timeout: 7200
+    inputs:
+      rai_insights_dashboard: ${{parent.jobs.create_rai_job_dev.outputs.rai_insights_dashboard}}
+      max_depth: 3
+      filter_features: '[]'
+      
+  gather_01:
+      type: command
+      component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.21.0
+      limits:
+        timeout: 7200
+      inputs:
+        constructor: ${{parent.jobs.create_rai_job_dev.outputs.rai_insights_dashboard}}
+        insight_1: ${{parent.jobs.error_analysis_dev.outputs.error_analysis}}

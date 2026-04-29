@@ -1,0 +1,73 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+name: prepare_model_and_data_for_rai
+display_name: "Prepare Model and Data for RAI"
+version: 0.3.0
+type: command
+
+inputs:
+  model_name:
+    type: string
+  model_version:
+    type: integer
+    optional: true
+    description: Model version (optional if model_info_path_input is provided)
+  model_info_path_input:
+    type: uri_folder
+    optional: true
+    description: Alternative to model_version - reads version from model_info.json
+  binary_label_name:
+    type: string
+  time_column:
+    type: string
+    optional: true
+  event_column:
+    type: string
+    optional: true
+  time_horizon:
+    type: integer
+    optional: true
+  train_data:
+    type: mltable
+  test_data:
+    type: mltable
+  extra_features:
+    type: string
+    optional: true
+    default: '[]'
+  test_assets:
+    type: uri_folder
+    optional: true
+    description: Optional folder containing test_assets.json with threshold override
+  remove_missing:
+    type: string
+    optional: true
+    description: Comma-separated list of columns to check for NaN before dropping rows
+
+outputs:
+  train_data_out:
+    type: mltable
+  test_data_out:
+    type: mltable
+  model_info_path:
+    type: string
+
+code: .
+environment: azureml:rai-survival-test:13
+
+command: >-
+  python main.py
+  --model_name ${{inputs.model_name}}
+  $[[--model_version ${{inputs.model_version}}]]
+  $[[--model_info_path_input ${{inputs.model_info_path_input}}]]
+  --binary_label_name ${{inputs.binary_label_name}}
+  $[[--time_column ${{inputs.time_column}}]]
+  $[[--event_column ${{inputs.event_column}}]]
+  $[[--time_horizon ${{inputs.time_horizon}}]]
+  --train_data ${{inputs.train_data}}
+  --test_data ${{inputs.test_data}}
+  --train_data_out ${{outputs.train_data_out}}
+  --test_data_out ${{outputs.test_data_out}}
+  --model_info_path ${{outputs.model_info_path}}
+  $[[--extra_features '${{inputs.extra_features}}']]
+  $[[--test_assets ${{inputs.test_assets}}]]
+  $[[--remove_missing ${{inputs.remove_missing}}]]

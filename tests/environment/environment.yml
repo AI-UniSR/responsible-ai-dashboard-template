@@ -1,0 +1,6 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: rai-survival-test
+version: "13"
+image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04
+conda_file: conda_dependencies.yml
+description: rai-survival-test environment for Responsible AI Survival Analysis Dashboard Only pip packages are included in conda_dependencies.yml

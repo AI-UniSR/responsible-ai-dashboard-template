@@ -1,0 +1,79 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+name: prepare_e2e_survival_assets
+display_name: "Prepare E2E Survival Test Assets"
+version: 1.0.0
+type: command
+description: >
+  Generate synthetic survival data, train a GradientBoostingSurvivalAnalysis model,
+  and prepare all assets needed for E2E testing of RAI survival pipeline.
+  Outputs include train/test MLTables, registered model, and test_assets with threshold.
+
+inputs:
+  model_name:
+    type: string
+    description: Name for the registered survival model
+  time_horizon:
+    type: integer
+    default: 12
+    optional: true
+    description: Time horizon for binary classification (months)
+  n_samples:
+    type: integer
+    default: 500
+    optional: true
+    description: Number of synthetic samples to generate
+  test_size:
+    type: number
+    default: 0.3
+    optional: true
+    description: Proportion of data for test set (0.0-1.0)
+  random_state:
+    type: integer
+    default: 42
+    optional: true
+    description: Random seed for reproducibility
+  missing_value_columns:
+    type: string
+    optional: true
+    description: Comma-separated list of columns to inject NaN values for testing
+  missing_value_fraction:
+    type: number
+    default: 0.0
+    optional: true
+    description: Fraction of rows to set as NaN in specified columns (0.0-1.0)
+  remove_missing:
+    type: string
+    optional: true
+    description: Comma-separated list of columns to check for NaN before dropping rows
+
+outputs:
+  train_data:
+    type: mltable
+    description: Training dataset as MLTable
+  test_data:
+    type: mltable
+    description: Test dataset as MLTable
+  model_info_path:
+    type: uri_folder
+    description: Folder containing model_info.json with model name and version
+  test_assets:
+    type: uri_folder
+    description: Folder containing test_assets.json with threshold (66th percentile)
+
+code: .
+environment: azureml:rai-survival-test:13
+
+command: >-
+  python main.py
+  --model_name ${{inputs.model_name}}
+  $[[--time_horizon ${{inputs.time_horizon}}]]
+  $[[--n_samples ${{inputs.n_samples}}]]
+  $[[--test_size ${{inputs.test_size}}]]
+  $[[--random_state ${{inputs.random_state}}]]
+  $[[--missing_value_columns ${{inputs.missing_value_columns}}]]
+  $[[--missing_value_fraction ${{inputs.missing_value_fraction}}]]
+  $[[--remove_missing ${{inputs.remove_missing}}]]
+  --train_data ${{outputs.train_data}}
+  --test_data ${{outputs.test_data}}
+  --model_info_path ${{outputs.model_info_path}}
+  --test_assets ${{outputs.test_assets}}
