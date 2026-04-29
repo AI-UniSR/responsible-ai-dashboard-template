@@ -1,8 +1,20 @@
 # Azure ML Responsible AI Dashboard Template
 
+![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19889328.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 This repository provides a comprehensive template for integrating the Responsible AI Dashboard into Azure Machine Learning workflows. The template supports both **classification** and **survival analysis** models, with advanced features for model preparation and explainability analysis.
 
 Additional information can be found in the Azure documentation: https://learn.microsoft.com/en-us/azure/machine-learning/how-to-responsible-ai-insights-sdk-cli?view=azureml-api-2&tabs=yaml
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+## Citation
+
+This repository has been archived on Zenodo and assigned a DOI.
+> DOI: [10.5281/zenodo.19093594](https://doi.org/10.5281/zenodo.19889328)
 
 ## Features
 
