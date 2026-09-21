@@ -7,6 +7,16 @@ This repository provides a comprehensive template for integrating the Responsibl
 
 Additional information can be found in the Azure documentation: https://learn.microsoft.com/en-us/azure/machine-learning/how-to-responsible-ai-insights-sdk-cli?view=azureml-api-2&tabs=yaml
 
+## Scope
+
+This is a **template**, meant to be reused: it shows how to wire a model into the Responsible AI
+Dashboard, not to reproduce any particular manuscript's results. No patient data is shipped
+here, so nothing in this repository regenerates any published figures or numbers. The survival
+use case under `tests/` is a **demo on synthetic data**, present so the pipeline can be run
+end-to-end; it is not any specific analysis. [docs/med-cli/](docs/med-cli/) documents the model
+definition used in one published analysis (Med-CLI) without weights, data, or a trained
+artefact — it is documentation only and not runnable without controlled-access data.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

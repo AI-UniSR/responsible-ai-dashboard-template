@@ -20,7 +20,7 @@ This test suite validates the end-to-end compatibility between survival models (
 **[prepare_e2e_survival_assets/](prepare_e2e_survival_assets/)**
 - Generates 500 synthetic patients with 6 features (age, bmi, sex, tumor, biomarker_1, biomarker_2)
 - Trains `GradientBoostingSurvivalAnalysis` model
-- Calculates **threshold as 66th percentile** of risk predictions on test set
+- Calculates **threshold as 66th percentile** of risk predictions on the training set (locked before evaluation)
 - Outputs: train/test MLTables, registered model, `test_assets.json` with threshold
 
 **[environment/](environment/)**
@@ -39,22 +39,26 @@ The `test_assets` folder contains `test_assets.json`:
 {
   "threshold": 1.2345,
   "percentile": 66,
-  "description": "Threshold calculated as 66th percentile of risk predictions on test set"
+  "description": "Threshold calculated as 66th percentile of risk predictions on training set"
 }
 ```
 
 When `prepare_model_and_data_for_rai` receives `test_assets`, it:
 1. Loads `threshold` from JSON
 2. Overrides default (1.0) in `SkSurvRiskWrapper(model, threshold=loaded_value)`
-3. Affects probability calibration: `p = risk / (risk + threshold)`
+3. Sets the cutoff of the rank-preserving sigmoid mapping: `p = expit(s - threshold)`, a score
+   transformation, not a calibrated probability
 
 ## Critical Dependencies
 
 ### Model Contract
 Survival models **must**:
-- Have `predict(X)` returning **risk scores** (not survival probabilities)
+- Have `predict(X)` returning **risk scores** (not survival probabilities), valid over the whole
+  real line by default; strictly positive scores are only required when the wrapper is
+  constructed with `log_transform=True`
 - Expose `feature_names_in_` attribute (sklearn convention)
 - Be compatible with `scikit-survival` (e.g., `CoxPHSurvivalAnalysis`, `GradientBoostingSurvivalAnalysis`)
+  or any other estimator exposing `predict()` — `SkSurvRiskWrapper` is not scikit-survival-specific
 
 ### Data Format
 - **MLTable**: CSV + `MLTable` YAML file with `read_delimited` transformation
@@ -87,7 +91,7 @@ model = CoxPHSurvivalAnalysis()
 - **Warning**: Small samples (<100) may cause RAI components to fail
 
 ### Modifying Threshold Percentile
-Currently hardcoded at 66th percentile. To change:
+Currently hardcoded at 66th percentile, computed on the training split. To change:
 1. Edit `calculate_threshold_percentile(percentile=66)` in `main.py`
 2. Update `save_test_assets()` call with new percentile value
 
