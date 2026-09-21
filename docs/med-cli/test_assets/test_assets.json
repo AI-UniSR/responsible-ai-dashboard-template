@@ -1,0 +1,5 @@
+{
+  "threshold": 1.871752447313276,
+  "percentile": 80,
+  "source": "80th percentile of the partial hazard on the derivation cohort (Cohort 1), fixed before evaluation on the external cohort (Cohort 2); not computed on evaluation/test data."
+}
