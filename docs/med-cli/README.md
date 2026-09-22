@@ -19,5 +19,9 @@ and does not regenerate the manuscript's figures or numbers.
 The deployed wrapper class is `SkSurvRiskWrapper` (`components/prepare_model_and_data_for_rai/risk_wrapper.py`),
 which accepts any estimator exposing `predict()`; Med-CLI's own estimator is a lifelines
 `CoxPHFitter`, not scikit-survival. `log_transform` is a constructor parameter of that wrapper,
-not a pipeline or component input — Med-CLI sets it to `True` when constructing the wrapper so
-the sigmoid sees the log-partial-hazard.
+not a pipeline or component input. In this template repository, `main.py` constructs the wrapper
+in identity mode (`log_transform=False`). By contrast, the published Med-CLI run constructed the
+wrapper with `log_transform=True` so the sigmoid saw the log-partial-hazard; that is the setting
+under which a multiplicative positive risk score keeps the cutoff's meaning. Accordingly,
+[`pipeline.yml`](pipeline.yml) records the published run configuration for documentation, but it is
+not runnable as-is and should not be read as the current template integration.

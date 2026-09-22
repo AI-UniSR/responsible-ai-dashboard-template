@@ -87,6 +87,21 @@ def test_rejects_non_finite_scores():
         wrapper.predict_proba(pd.DataFrame({"x": [np.inf]}))
 
 
+@pytest.mark.parametrize("threshold", [np.nan, np.inf, -np.inf])
+def test_rejects_non_finite_thresholds(threshold):
+    model = FakeRiskModel(["x"])
+    wrapper = SkSurvRiskWrapper(model, threshold=threshold)
+    with pytest.raises(ValueError, match="finite scalar"):
+        wrapper.predict_proba(pd.DataFrame({"x": [1.0]}))
+
+
+def test_rejects_non_scalar_threshold():
+    model = FakeRiskModel(["x"])
+    wrapper = SkSurvRiskWrapper(model, threshold=np.array([1.0]))
+    with pytest.raises(ValueError, match="finite scalar"):
+        wrapper.predict_proba(pd.DataFrame({"x": [1.0]}))
+
+
 def test_rejects_non_positive_scores_with_log_transform():
     model = FakeRiskModel(["x"])
     wrapper = SkSurvRiskWrapper(model, threshold=1.0, log_transform=True)
