@@ -32,7 +32,7 @@ class SkSurvRiskWrapper(BaseEstimator, ClassifierMixin):
             raise ValueError("Risk score must be finite; got non-finite value(s).")
 
         cutoff = np.asarray(self.threshold, dtype=float)
-        if cutoff.size != 1:
+        if cutoff.ndim != 0:
             raise ValueError("Threshold must be a finite scalar.")
         cutoff = float(cutoff.reshape(()))
         if not np.isfinite(cutoff):
