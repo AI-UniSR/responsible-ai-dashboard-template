@@ -136,22 +136,27 @@ def main():
         model = SkSurvRiskWrapper(surv_model, threshold=wrapper_threshold, decision_threshold=0.5)
         if args.extra_features:
             print("Survival mode with extra features detected.")
-            print("Determining used features from model...")
-            used_features = list(model.feature_names_in_)
-            print(f"Model features ({len(used_features)}): {used_features}")
-
+            print(f"Model features ({len(features)}): {features}")
             print(f"Adding extra features: {args.extra_features}")
             features += [f for f in args.extra_features if f not in features]
-
             print(f"Final feature list ({len(features)}): {features}")
-            # Survival mode with extra features
-            # --- Expand model input features using ColumnTransformer ---
-            model = build_selector_pipeline(
-                model_name=args.model_name,
-                model_version=args.model_version,
-                reference_df=df_train,
-                target_col=args.binary_label_name
+
+            # Selector keeps the raw model's own features (not the wrapper's, which has none)
+            # and drops audit-only extras before they reach predict(); the classifier wrapper
+            # goes on top so the registered object still exposes predict/predict_proba.
+            model_features = [str(f) for f in surv_model.feature_names_in_]
+            selector = ColumnTransformer(
+                [("keep", "passthrough", model_features)],
+                remainder="drop",
+                verbose_feature_names_out=False,
             )
+            selector.set_output(transform="pandas")
+            selector.fit(df_train[features])
+
+            model = Pipeline([
+                ("selector", selector),
+                ("model", model),
+            ])
             _ , out_model_version = register_model(model, out_model_name, 
                                                            code_paths=["./risk_wrapper.py"],
                                                            input_example=df_train[features].iloc[:5,:])

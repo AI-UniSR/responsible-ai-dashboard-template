@@ -1,2 +1,6 @@
 .amlignore.amltmp
 .amlignore
+.pytest_cache/
+__pycache__/
+*.pyc
+

@@ -5,7 +5,7 @@ This component generates:
 1. Synthetic survival data with ~500 patients
 2. A trained GradientBoostingSurvivalAnalysis model (scikit-survival)
 3. Train/Test MLTable datasets
-4. test_assets folder with threshold JSON (66th percentile of predictions on test set)
+4. test_assets folder with threshold JSON (66th percentile of predictions on training set)
 """
 import argparse
 import os
@@ -264,23 +264,25 @@ def train_survival_model(df_train: pd.DataFrame, feature_cols: list, time_col: s
     return model
 
 
-def calculate_threshold_percentile(model, df_test: pd.DataFrame, feature_cols: list, percentile: float = 66) -> float:
+def calculate_threshold_percentile(model, df: pd.DataFrame, feature_cols: list, percentile: float = 66) -> float:
     """
-    Calculate the threshold based on percentile of risk predictions on test set.
+    Calculate the threshold based on percentile of risk predictions on the given DataFrame.
+    Called with the training split, so the cutoff is locked before evaluation.
     
     Args:
         model: Trained survival model
-        df_test: Test DataFrame
+        df: DataFrame to compute risk predictions on
         feature_cols: List of feature column names
         percentile: Percentile to use (default 66)
     
     Returns:
         Threshold value at the specified percentile
     """
-    X_test = df_test[feature_cols].values
-    risk_scores = model.predict(X_test)
+    X = df[feature_cols].values
+    risk_scores = model.predict(X)
     threshold = np.percentile(risk_scores, percentile)
     return float(threshold)
+
 
 
 def register_model_mlflow(model, model_name: str, input_example: pd.DataFrame) -> int:
@@ -327,7 +329,7 @@ def save_test_assets(output_path: str, threshold: float, percentile: float = 66)
     test_assets = {
         "threshold": threshold,
         "percentile": percentile,
-        "description": f"Threshold calculated as {percentile}th percentile of risk predictions on test set"
+        "description": f"Threshold calculated as {percentile}th percentile of risk predictions on training set"
     }
     
     with open(output_path / "test_assets.json", "w") as f:
@@ -446,9 +448,9 @@ def main():
     model = train_survival_model(df_train, feature_cols, time_col, event_col)
     print("Model trained successfully")
     
-    # Step 4: Calculate threshold (66th percentile on test set)
-    print("\n[Step 4] Calculating threshold (66th percentile on test set)...")
-    threshold = calculate_threshold_percentile(model, df_test, feature_cols, percentile=66)
+    # Step 4: Calculate threshold (66th percentile on training set)
+    print("\n[Step 4] Calculating threshold (66th percentile on training set)...")
+    threshold = calculate_threshold_percentile(model, df_train, feature_cols, percentile=66)
     print(f"Threshold (66th percentile): {threshold:.4f}")
     
     # Step 5: Register model with MLflow
