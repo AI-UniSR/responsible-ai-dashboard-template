@@ -47,6 +47,8 @@ responsible-ai-dashboard-template/
 │       └── utils.py                         # Utility functions
 ├── classification-pipeline.yml              # Pipeline for classification models
 ├── survival-pipeline.yml                    # Pipeline for survival analysis models
+├── docs/med-cli/                             # Published-run documentation (not runnable)
+├── tests/                                    # Synthetic demo pipeline and unit tests
 └── README.md                                # This file
 ```
 ## How It Works
