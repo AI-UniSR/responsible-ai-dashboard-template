@@ -4,8 +4,11 @@
 
 - `lifelines.CoxPHFitter` (Cox proportional hazards), fit on the derivation cohort (Cohort 1).
 - Inputs (4): `Age`, `Sex`, `adm_dysphagia`, `Braden Score`.
-- `predict()` returns the partial hazard `r` (a risk score, not a probability or a survival
-  probability), on the model's native positive-real scale.
+- The fitted `CoxPHFitter` was passed through a thin Med-CLI-specific adapter exposing
+  `predict(X) = predict_partial_hazard(X)` and `feature_names_in_` from the fitted covariates,
+  and the wrapper received that adapter.
+- Through that adapter, `predict()` returns the partial hazard `r` (a risk score, not a
+  probability or a survival probability), on the model's native positive-real scale.
 
 ## Cutoff derivation
 

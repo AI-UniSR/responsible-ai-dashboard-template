@@ -8,12 +8,13 @@ class SkSurvRiskWrapper(BaseEstimator, ClassifierMixin):
     """Turns any estimator exposing predict() (risk score, any scale) into a binary classifier.
 
     p = expit(s - cutoff), s = model.predict(X), cutoff = threshold; equals 0.5 at s == cutoff.
-    This is a rank-preserving score transformation, not a calibrated probability: predicted
-    labels and rankings are those of s itself. Valid domain is the whole real line; s and
-    threshold must additionally be strictly positive when log_transform=True, since the score
-    is log-transformed (together with the cutoff) before the sigmoid. Non-finite scores are
-    rejected. Beyond |s - cutoff| ~= 745 the sigmoid saturates to 0/1 in floating point, which
-    cannot create ties that weren't already there.
+    Mathematically this is a strictly increasing score transformation, not a calibrated
+    probability: predicted labels and rankings follow s itself. Valid domain is the whole real
+    line; s and threshold must additionally be strictly positive when log_transform=True, since
+    the score is log-transformed (together with the cutoff) before the sigmoid. Non-finite
+    scores and thresholds are rejected. Numerically, probabilities saturate to 0.0/1.0 in
+    floating point beyond |s - cutoff| ~= 37, so distinct extreme scores can tie on p; labels
+    are unaffected because saturation never crosses the 0.5 cutoff.
     """
 
     def __init__(self, model, threshold=1.0, decision_threshold=0.5, log_transform=False):
@@ -30,7 +31,12 @@ class SkSurvRiskWrapper(BaseEstimator, ClassifierMixin):
         if not np.all(np.isfinite(s)):
             raise ValueError("Risk score must be finite; got non-finite value(s).")
 
-        cutoff = self.threshold
+        cutoff = np.asarray(self.threshold, dtype=float)
+        if cutoff.size != 1:
+            raise ValueError("Threshold must be a finite scalar.")
+        cutoff = float(cutoff.reshape(()))
+        if not np.isfinite(cutoff):
+            raise ValueError("Threshold must be a finite scalar.")
         if self.log_transform:
             if np.any(s <= 0) or not (cutoff > 0):
                 raise ValueError(
