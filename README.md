@@ -33,7 +33,7 @@ latest version.
 - **Extra Features Integration**: Allows adding features to the RAI dashboard that weren't used in the original model training
 - **Custom Model Preparation Component**: Handles model wrapping, feature expansion, and data filtering
 - **Built-in Azure RAI Components**: Uses Microsoft AzureML registry components for error analysis, insight gathering, and more
-- **Prediction Replay (opt-in)**: Runs the RAI dashboard for models the RAI environment cannot load (newer Python, numpy, pandas or scikit-learn) by replaying their predictions. See [Prediction replay](#prediction-replay-models-the-rai-environment-cannot-load)
+- **Prediction Replay (opt-in; recommended when the model's library versions differ from the RAI environment's)**: Runs the RAI dashboard for models the RAI environment cannot load (newer Python, numpy, pandas, scikit-learn or scikit-survival) by replaying their predictions. See [Prediction replay](#prediction-replay-models-the-rai-environment-cannot-load)
 - **Pipeline Automation**: Ready-to-use YAML pipelines for `az ml job create` submission
 
 ## Folder Structure
@@ -172,6 +172,46 @@ inputs:
 
 **Important:** All extra features must exist in your training and test MLTable datasets.
 
+The registered model puts a column selector in front of your model, which drops the extra features:
+- in survival mode the selector hands the model a DataFrame with its own column names;
+- in classification mode it hands the model a numpy array, as it always has. If your model cannot
+  predict from that array (for example a scikit-learn `Pipeline` that selects its columns by name
+  with a `ColumnTransformer`), the component notices on a few training rows and hands it a
+  DataFrame with its own column names instead.
+
+Models that work with the array keep it, because counterfactuals rely on it. dice-ml scores
+object-dtype frames, which XGBoost and LightGBM accept as an array but reject as a DataFrame. With
+dice-ml's `kdtree` method, plain scikit-learn models do the same. Counterfactuals for a model that
+gets a DataFrame are not tested here (see
+[What the RAI components hand your model](#what-the-rai-components-hand-your-model)).
+
+The selector takes the column names from the model's `feature_names_in_` as plain strings, as the
+survival mode already did. LightGBM (4.5 or later, which added `feature_names_in_`) and XGBoost store
+them as `numpy.str_`, which scikit-learn's `ColumnTransformer` rejects ("No valid specification of
+the columns"). This was seen with 1.5.1, and the same check is in every release up to 1.9.1. Before
+this fix, those models failed in classification mode with extra features.
+
+LightGBM and XGBoost models fitted on pandas `category` columns read the array's raw values as
+category codes, because the template never rebuilds the `category` dtype. That is only right when
+the categories are exactly 0..k-1. The component checks the model and the estimators it hands its
+input to: Pipeline steps, a search's `best_estimator_`, calibration and ensemble members. It flags:
+- LightGBM with categories other than 0..k-1;
+- XGBoost with any categorical feature, because XGBoost before 3.1 does not store the category
+  values, so the component cannot check them.
+
+What happens then depends on whether the model ran before this change:
+- **Refused with a clear error** when the model's feature names are a booster's `numpy.str_`. Those
+  models failed before this change.
+- **Only a warning** otherwise, so a model that ran before still runs. An example is a booster
+  behind transformer steps.
+
+Before training, recode such columns so that the categories are exactly 0..k-1 for LightGBM, or as
+plain numeric columns for XGBoost.
+
+The `responsibleai-tabular` images ship LightGBM but not XGBoost. An XGBoost model therefore also
+needs `use_model_dependency: true` in the constructor, as the comment in
+`classification-pipeline.yml` says. Either library must also be in the component's environment.
+
 ### 4. Submit the Pipeline
 
 ```bash
@@ -183,11 +223,88 @@ az ml job create \
   --stream
 ```
 
+## Interactive dashboard in Azure ML Studio
+
+Without compute, Studio shows the dashboard that gather saved. Its interactive features need a
+compute instance ("Connect compute"): error analysis with other settings or cohorts, the heatmap,
+ICE plots and what-if counterfactuals.
+
+**For the interactive dashboard with the 0.21.0 or 0.22.0 components, set
+`rai_tabular_insight_gather` to 0.20.0.** The other steps keep their version. This is not yet
+confirmed in Studio itself.
+
+```yaml
+  gather_01:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.20.0
+```
+
+It rests on the following:
+- **Observed**, in Studio's terminal output for a dashboard built with the 0.22.0 components (all
+  steps): Studio started `responsibleai-tabular:28` and typed a startup script whose first line
+  imports `azureml.core`, the v1 SDK. The import failed, and the dashboard never loaded.
+- **Read**, in the image definitions: only the images up to `:25` contain azureml-core. Gather
+  0.20.0 runs in `:24`, 0.21.0 in `:26` and 0.22.0 in `:28`.
+- **Inferred**: Studio uses the image of the gather job, whose dashboard output its script
+  downloads. Every 0.22.0 step runs in `:28`, so the observation alone cannot tell which step's
+  image it is.
+- **Emulated** in `:24`, not in Studio: the import, the dashboard load and the backend calls, but not
+  Studio's package upgrade, sign-in or download.
+  - Run on replay dashboards built with every step at 0.20.0, and with 0.22.0 plus gather 0.20.0.
+  - Gather 0.20.0 read the outputs of the 0.22.0 steps without problems: all use responsibleai
+    0.36.0.
+
+The dashboard's model must also load in that image:
+- **A replay dashboard always loads**, because it needs only ml-wrappers. Everything then works live
+  except ICE plots, which predict on new rows. What-if needs counterfactuals, which replay cannot
+  add.
+- **A default-mode survival dashboard does not.** Its pickled `SkSurvRiskWrapper` needs the
+  template's `risk_wrapper` module and scikit-survival, which the image does not have.
+- **A default-mode classification dashboard loads if the image has the model's libraries.** Then
+  everything works live, predictions on changed rows included. This was emulated in `:24` on the
+  dashboards of the classification e2e, one with the numpy selector and one with the DataFrame
+  fallback. The images ship scikit-learn 1.5.1 and LightGBM, not XGBoost (seen in `:24`, `:26`,
+  `:28` and `:39`).
+
+## What the RAI components hand your model
+
+In the default mode the RAI components call your model on data they read and build themselves:
+- **0/1 columns arrive as booleans.** The RAI components read the component's MLTable with type
+  inference, which turns a column holding only 0 and 1 into `bool` (observed). A model that gets a
+  DataFrame receives `bool` columns: classification without extra features, survival mode, or the
+  DataFrame fallback of section 3. Preprocessing that rejects them, such as
+  `SimpleImputer(strategy="most_frequent")` on a group of 0/1 columns, fails in the constructor
+  (inferred).
+- **Counterfactuals (dice-ml) hand the model categorical values as strings.**
+  - A 0/1 categorical feature arrives as `'True'`/`'False'`, and models that expect numbers fail
+    ("could not convert string to float"). This was observed with LightGBM in
+    `responsibleai-tabular` 26, 28 and 39.
+  - A model that encodes integer categories itself, for example with a `OneHotEncoder` fitted on
+    0/1/2, sees `'1'` as an unknown category. It fails, or, with `handle_unknown="ignore"`, scores
+    those rows as if the category were absent (inferred, not run).
+- **What-if and ICE build their rows from the dashboard's JSON**, so the same type questions apply
+  to them. A prediction on a row with a changed numeric value works (emulated); changed categorical
+  values were not run.
+- **No column arrives as pandas `category`.** The template never rebuilds that dtype: the component
+  reads its inputs with `read_csv`, the RAI components with MLTable, and both give int64.
+  - Without extra features, in the default mode and with replay alike, a LightGBM model fitted on
+    `category` columns fails with "categorical_feature do not match".
+  - An XGBoost model reads the raw values as category codes (inferred), which is right only for
+    0..k-1. The component prints a warning.
+  - With extra features, see section 3.
+
 ## Prediction replay (models the RAI environment cannot load)
+
+**Recommended whenever the model's libraries differ from the RAI environment's: the RAI components
+then never load them.** So any library version that can also run this component works. This was
+verified with Python 3.12, numpy 2, pandas 2, scikit-learn 1.9 and scikit-survival 0.28. The
+trade-offs:
+- no counterfactuals, what-if or ICE;
+- the limits under [Requirements and limits](#requirements-and-limits).
 
 The Microsoft RAI components load the registered model **inside their own environment**,
 `responsibleai-tabular`:
-- Python 3.9 for the 0.21.0 components, 3.10 for 0.22.0;
+- Python 3.9 for the 0.20.0 and 0.21.0 components, 3.10 for 0.22.0;
 - numpy < 1.24, pandas < 2, scikit-learn 1.5.1 and responsibleai 0.36.
 
 A model built with a newer stack cannot be loaded there. Examples: Python 3.12, numpy 2,
@@ -198,9 +315,7 @@ help: it installs the model's packages into the RAI environment and cannot chang
 
 1. **The component runs in the model's own environment.**
    - It prepares the data as usual: survival horizon, extra features, missing-value handling.
-   - It builds the same wrapper or pipeline the default mode would register. One difference: in
-     classification mode with extra features, the selector hands the model a DataFrame, so models
-     that select their columns by name work.
+   - It builds the same wrapper or pipeline the default mode would register.
    - It computes that model's `predict` and `predict_proba` on exactly the rows it writes for the
      RAI components.
 2. **It registers a replay model instead of the pickled model.** The model is named
@@ -210,7 +325,12 @@ help: it installs the model's packages into the RAI environment and cannot chang
    loader rebuilds an ml-wrappers `PredictionsModelWrapperClassification` from plain files.
    Nothing pickled in the model's environment is ever unpickled there.
 
-The flag is off by default. Without it, the component behaves exactly as before.
+The flag is off by default. Without it, the component registers what it did before for every model
+that worked. The changes to the default mode only affect models that failed before:
+- the DataFrame fallback and the plain-string column names (section 3), including the refusal of
+  LightGBM models whose categories are not 0..k-1 and of XGBoost models with categorical features,
+  when their names show that they failed before;
+- `SkSurvRiskWrapper` declaring itself fitted, which matters only with scikit-learn >= 1.8.
 
 ### Enabling it
 
@@ -218,7 +338,8 @@ The component must run in the model's environment. An Azure ML pipeline node can
 component's environment: a node-level `environment:` is accepted but ignored (we tried it). So make a
 copy of `components/prepare_model_and_data_for_rai/component.yml` with:
 - `environment:` pointing at the model's environment;
-- its own `name:`;
+- its own `name:` (a lowercase letter, then lowercase letters, digits or underscores, for example
+  `prepare_model_and_data_for_rai_modern`);
 - if the copy lives in another folder, `code:` pointing back at `components/prepare_model_and_data_for_rai`.
 
 Use that copy in the pipeline, and keep `use_model_dependency` false:
@@ -234,11 +355,22 @@ jobs:
 
   create_rai_job_dev:
     type: command
+    # the same version as your other rai_tabular_* steps (the template pins 0.21.0)
     component: azureml://registries/azureml/components/rai_tabular_insight_constructor/versions/0.22.0
     inputs:
       # ... the usual inputs ...
       use_model_dependency: false
 ```
+
+Use the same version for every `rai_tabular_*` step, except gather at 0.20.0 if you want the
+interactive dashboard (not yet confirmed in Studio; see
+[Interactive dashboard in Azure ML Studio](#interactive-dashboard-in-azure-ml-studio)).
+- **End to end.** Replay was verified with every step at 0.22.0
+  (`tests/e2e-test-replay-pipeline.yml`), with every step at 0.20.0, and with 0.22.0 plus gather
+  0.20.0. The last two are the same pipeline with the versions changed (commands in
+  [tests/README.md](tests/README.md)).
+- **Inside the images.** The replay model was also checked inside the images of 0.21.0
+  (`responsibleai-tabular:26`), 0.22.0 (`:28`) and `:39` (`tests/rai_env/`).
 
 `tests/replay_assets/prepare_model_and_data_for_rai.modern.yml` is such a copy, and
 `tests/unit/test_component_variants.py` keeps it in sync with the original.
@@ -252,7 +384,7 @@ Instead of a file, you can register a variant once and reference it as `azureml:
 
 ```bash
 az ml component create --file components/prepare_model_and_data_for_rai/component.yml \
-  --set name=prepare_model_and_data_for_rai_<env> \
+  --set name=prepare_model_and_data_for_rai_<suffix> \
   --set environment=azureml:<your-model-environment>:<version>
 ```
 
@@ -268,9 +400,10 @@ The model's environment needs the model's own libraries, plus what the component
 |---|---|---|
 | Constructor | yes | replay e2e, RAI-environment check |
 | Error analysis (tree) | yes | replay e2e, RAI-environment check |
-| Error analysis heatmap and cohort filters | yes (same dataset rows; inferred) | not run |
+| Error analysis heatmap and cohort filters | yes for the heatmap; cohort filters expected (they only select stored rows; not run) | heatmap: an emulation of Studio's backend calls in `responsibleai-tabular` 24, 26, 27, 28 and 39 (not in this repository) |
+| Interactive dashboard in Studio (connect compute) | expected with gather 0.20.0 (not yet confirmed in Studio), except ICE | an emulation of the startup in `:24`, not Studio |
 | Explanations (feature importance) | yes, numeric NaN included | replay e2e, RAI-environment check |
-| Data balance | yes (never uses the model) | RAI-environment check (computed with categorical features) |
+| Data balance | not affected (never uses the model) | RAI-environment check (asserts the measures are computed) |
 | Causal analysis | expected (never uses the model; refuses NaN) | not run |
 | Score card | yes | replay e2e |
 | Static dashboard (gather) | yes | replay e2e |
@@ -280,6 +413,10 @@ The model's environment needs the model's own libraries, plus what the component
 Replay can only answer rows it has seen: every row of the train and test sets, including the
 copies RAI makes when it saves and reloads them. Anything that scores new or perturbed rows fails
 with "The query data was not found in the combined dataset".
+
+Data balance does not reach the dashboard with the registry components, with or without replay.
+The gathered dashboards of both e2e tests (gather 0.21.0 in the default mode, 0.22.0 with replay)
+hold its configuration but no measures (`measures.json`).
 
 ### Requirements and limits
 
@@ -291,7 +428,7 @@ with "The query data was not found in the combined dataset".
     punctuation such as `( ) / - + > , .` are fine, while `#`, quotes, backslashes, backticks and
     symbols such as `²` or `≥` are not;
   - no date or time features, including numbers or strings in a date-like column (`*_at`, `*_time`,
-    `date`, `timestamp*`) that the RAI JSON reload would turn into dates;
+    `date`, `datetime`, `modified`, `timestamp*`) that the RAI JSON reload would turn into dates;
   - no `'`, `\` or line breaks inside string values;
   - at least two features.
 - **`feature_metadata.dropped_features` is not supported.** With ml-wrappers 0.6.4
@@ -300,17 +437,29 @@ with "The query data was not found in the combined dataset".
 - **Keep `use_model_dependency` false.** With true, the RAI components `pip install -U` the model's
   requirements into their own environment. The replay model declares none besides MLflow's pin,
   but its Python version still comes from the model's environment.
-- **Size.** The 0.22.0 components run ml-wrappers 0.6.0 (in `responsibleai-tabular:28`), which
-  looks up each row with a pandas query that scans the stored rows. Measured with 400 train and
-  200 test rows: about 10 s for the constructor checks, which every RAI job repeats. Fine for
-  thousands of rows, slow for hundreds of thousands. Lower `maximum_rows_for_test_dataset` if
-  needed. `responsibleai-tabular:39` (ml-wrappers 0.6.4) hashes rows instead and is much faster.
+- **Size.** The registry components 0.20.0, 0.21.0 and 0.22.0 (`responsibleai-tabular` 24, 26 and
+  28) run ml-wrappers 0.6.0, which finds each row with a pandas query over the stored rows (up to
+  three copies of every train and test row).
+  - Every job that builds RAIInsights (constructor, each tool, gather) looks up each train row 3
+    times and each test row at least twice. The cost should grow roughly with the square of the
+    row count (inferred, not measured).
+  - Measured with 400 train and 200 test rows on `:26` and `:28`: about 10 s for two constructions,
+    so about 5 s per job for the construction, plus the tool's own predictions. Larger sizes are not
+    measured; `:24` was not timed.
+  - To reduce the cost, subsample before this component. `maximum_rows_for_test_dataset` saves only
+    part of the test lookups and limits the analysis to the first test rows.
+  - ml-wrappers 0.6.4 (`responsibleai-tabular:39`) hashes rows instead (0.1 s for the same
+    constructions), but no registry component uses `:39`.
 - **Data governance.** The registered replay model contains every train and test row (features and
   predictions), like the dashboard itself. Apply the same access rules as to the data.
 - **Binary classification only.** That is what both of the template's modes (survival and
   classification) produce.
 - **Recent scikit-learn.** `SkSurvRiskWrapper` declares itself fitted, so selector → wrapper
   pipelines also predict with scikit-learn >= 1.8, which refuses unfitted pipelines.
+- **Classification with extra features in an environment with scikit-learn 1.6 or later.** Your model
+  runs inside a scikit-learn `Pipeline`, which checks it before predicting. It must have `fit`
+  (from 1.6, inferred) and inherit `BaseEstimator` (from 1.8). Otherwise the component fails with
+  scikit-learn's error, printed for both selectors. This does not apply without extra features.
 
 ### Missing values
 
@@ -329,18 +478,32 @@ RAI components keep their own rules, independent of replay:
 ### How it is tested
 
 - **`tests/unit/`:**
-  - the component in every mode with the flag off, where behaviour is unchanged;
+  - the component in every mode with the flag off, where it registers what it did before;
+  - in classification mode with extra features, the selector:
+    - the numpy array for models that accept it, also on hand-built frames shaped like dice-ml's;
+    - a DataFrame for a model that selects its columns by name;
+    - main's selector when neither works;
+    - the refusal of XGBoost fitted on `category` columns, on its own and inside a Pipeline,
+      CalibratedClassifierCV or GridSearchCV;
+    - only a warning when the model ran before (plain-string names), or has no extra features;
   - the same modes with the flag on, where only the registered model changes and the RAI datasets
     are byte-identical;
   - the replay builder and loader.
-- **`tests/rai_env/`:** the replay model loaded inside `responsibleai-tabular` versions 28 and 39,
-  and run through the RAIInsights steps of the pipeline.
+- **`tests/rai_env/`:**
+  - the replay model loaded inside `responsibleai-tabular` versions 26, 28 and 39, and run through
+    the RAIInsights steps of the pipeline;
+  - the same for the default mode's classification selector, including real dice-ml counterfactuals
+    for LightGBM, and the refusal of a LightGBM model whose categories are not 0..k-1, on its own,
+    in a Pipeline and inside CalibratedClassifierCV.
 - **`tests/e2e-test-replay-pipeline.yml`:**
   - a scikit-survival model trained on Python 3.12, numpy 2, pandas 2 and scikit-learn 1.9, with
     missing values and an audit-only extra feature;
   - run through the unmodified RAI components: constructor, error analysis, explanation, gather and
     score card;
   - followed by a final assertion step.
+- **`tests/e2e-test-classification-pipeline.yml`:** the default mode in classification with an
+  extra feature, through the 0.21.0 components as in `classification-pipeline.yml`. It uses a model
+  that selects its columns by position, and one that selects them by name.
 
 See [tests/README.md](tests/README.md).
 

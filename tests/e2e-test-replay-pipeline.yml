@@ -73,7 +73,7 @@ jobs:
   # ============================================================================
   prepare_model_and_data_for_rai:
     type: command
-    # The component, in the model's environment (copy of component.yml with only environment and code changed)
+    # The component in the model's environment: a copy of component.yml with its own name, environment and code
     component: replay_assets/prepare_model_and_data_for_rai.modern.yml
     inputs:
       model_name: ${{parent.inputs.model_name}}

@@ -52,10 +52,10 @@ inputs:
     description: >-
       Opt-in prediction replay (see README). Predictions are computed here and a replay model is
       registered instead of the wrapped model, so the RAI components never load the model's
-      libraries. Run this step in the model's own environment (a copy of this file with only
-      environment and code changed; a pipeline node cannot override it) and keep
-      use_model_dependency false in the RAI constructor. Counterfactuals, what-if and ICE are not
-      available in this mode.
+      libraries. Run this step in the model's own environment: a copy of this file with its own
+      name, that environment and, if the copy is moved, code pointing back here (a pipeline node
+      cannot override the environment). Keep use_model_dependency false in the RAI constructor.
+      Counterfactuals, what-if and ICE are not available in this mode.
 
 outputs:
   train_data_out:

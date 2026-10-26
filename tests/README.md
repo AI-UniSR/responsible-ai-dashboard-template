@@ -22,6 +22,8 @@ This test suite validates the end-to-end compatibility between survival models (
 - Trains `GradientBoostingSurvivalAnalysis` model
 - Calculates **threshold as 66th percentile** of risk predictions on the training set (locked before evaluation)
 - Outputs: train/test MLTables, registered model, `test_assets.json` with threshold
+- With `model_type: logreg` or `logreg_by_name` it adds a binary label column and trains a
+  classifier instead, for the classification e2e (see below)
 
 **[environment/](environment/)**
 - `conda_dependencies.yml`: Package dependencies (scikit-survival, mlflow, mltable)
@@ -116,7 +118,8 @@ ValueError: feature_names_in_ doesn't match DataFrame columns
 This reduces sample size. Ensure sufficient remaining samples (~70% retention expected).
 
 ### 4. RAI Component Requirements
-- `use_model_dependency: true` is **mandatory** for scikit-survival models
+- `use_model_dependency: true` is **mandatory** for scikit-survival models in the default mode; with
+  `replay_predictions: true` it must be false
 - `task_type: classification` (even though underlying model is survival)
 - Timeout: Error analysis may take >1 hour on large datasets
 
@@ -155,7 +158,18 @@ pandas 2, scikit-learn 1.9, scikit-survival 0.28, MLflow 2.22.
 `test_risk_wrapper.py`, `test_replay.py`, `test_main_modes.py` and `test_component_variants.py` need
 no Azure resources (the model registry is faked). `test_main_modes.py` runs `main()` in every mode:
 - with the flag off, it checks that registration and outputs are unchanged;
-- with the flag on, it checks that only the registered model changes.
+- with the flag on, it checks that only the registered model changes;
+- with extra features in classification mode, it checks the selector:
+  - models that predict from its numpy array keep it (scikit-learn, and XGBoost where installed,
+    with and without replay);
+  - they still predict on hand-built frames shaped like dice-ml's counterfactual frames. dice-ml
+    itself runs only in the RAI-environment check, with LightGBM;
+  - a model that selects its columns by name gets a DataFrame;
+  - a model that fails with both selectors keeps main's selector, and both errors are printed;
+  - an XGBoost model fitted on `category` columns is refused, on its own and inside a Pipeline,
+    CalibratedClassifierCV or GridSearchCV;
+  - a model that ran before (plain-string names, here XGBoost behind a transformer) or has no extra
+    features only gets a warning.
 
 Run them in both environments:
 
@@ -168,14 +182,32 @@ az ml job create --file tests/run-unit-tests-job.yml --set environment=azureml:r
 
 The RAI environment has no pytest, so `check_replay_in_rai_env.py` is a script. It builds replay
 models with the component's code, loads them as the RAI components do, and runs the RAIInsights
-steps of the pipeline: the constructor checks, error analysis, explanations, the gather and
-score-card save/load cycles, and `get_data()`. The data includes missing values and an audit-only
-extra feature. Run it for each RAI environment version your pipelines use:
+steps of the pipeline: the constructor checks, error analysis, explanations, data balance, the
+gather and score-card save/load cycles, and `get_data()`. The data includes missing values and an
+audit-only extra feature.
+
+The last scenarios check the default mode's classification selector (no replay) the same way:
+- a model that selects its columns by name must get a DataFrame;
+- LightGBM, plain and fitted on pandas `category` columns, must keep the numpy array and also run
+  counterfactuals (dice-ml). Their data leaves out the 0/1 column, which dice-ml would hand them as
+  'True'/'False' strings (see the main README);
+- a LightGBM model whose categories are not 0..k-1 must be refused, on its own, in a Pipeline and
+  inside CalibratedClassifierCV;
+- XGBoost is checked as well where installed. Images 26, 28 and 39 do not have it, and the final
+  line lists the skipped scenarios.
+
+Run it for each RAI environment version your pipelines use (26 for the 0.21.0 components, 28 for
+0.22.0), and once with XGBoost installed:
 
 ```bash
 az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml
 az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml \
+  --set environment=azureml://registries/azureml/environments/responsibleai-tabular/versions/26
+az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml \
   --set environment=azureml://registries/azureml/environments/responsibleai-tabular/versions/39
+az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml \
+  --set environment=azureml://registries/azureml/environments/responsibleai-tabular/versions/26 \
+  --set "command=pip install xgboost==2.1.4 && python tests/rai_env/check_replay_in_rai_env.py"
 ```
 
 ### Replay end to end (`e2e-test-replay-pipeline.yml`)
@@ -185,9 +217,9 @@ az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml \
 2. `prepare_model_and_data_for_rai` runs in the same environment, with `replay_predictions: true`
    and `extra_features: '["site"]'`.
 
-Both steps use the copies in `replay_assets/*.modern.yml`. A pipeline node cannot override a
-component's environment (it is accepted but ignored), and `unit/test_component_variants.py` keeps
-the copies in sync with the originals.
+   Both steps use the copies in `replay_assets/*.modern.yml`. A pipeline node cannot override a
+   component's environment (it is accepted but ignored), and `unit/test_component_variants.py`
+   keeps the copies in sync with the originals.
 3. The unmodified registry components 0.22.0 run, with `use_model_dependency: false`: constructor,
    error analysis, explanation, gather, and score card (config in `replay_assets/`).
 4. `check_replay_dashboard` runs in the RAI environment. It asserts that:
@@ -200,8 +232,43 @@ the copies in sync with the originals.
 az ml job create --file tests/e2e-test-replay-pipeline.yml
 ```
 
-`e2e-test-surv-pipeline.yml` (above) is the regression test for the default mode. It does not set
-the flag, so it must keep passing unchanged.
+The same pipeline with gather 0.20.0, for the interactive dashboard in Studio (see the main README),
+and with every step at 0.20.0:
+
+```bash
+REG=azureml://registries/azureml/components
+az ml job create --file tests/e2e-test-replay-pipeline.yml \
+  --set jobs.gather_insights.component=$REG/rai_tabular_insight_gather/versions/0.20.0
+az ml job create --file tests/e2e-test-replay-pipeline.yml \
+  --set jobs.create_rai_job.component=$REG/rai_tabular_insight_constructor/versions/0.20.0 \
+  --set jobs.error_analysis.component=$REG/rai_tabular_erroranalysis/versions/0.20.0 \
+  --set jobs.explanation.component=$REG/rai_tabular_explanation/versions/0.20.0 \
+  --set jobs.gather_insights.component=$REG/rai_tabular_insight_gather/versions/0.20.0 \
+  --set jobs.score_card.component=$REG/rai_tabular_score_card/versions/0.20.0
+```
+
+### Classification end to end (`e2e-test-classification-pipeline.yml`)
+
+This tests the default mode in classification with an extra feature, the path
+`classification-pipeline.yml` runs:
+1. `prepare_e2e_survival_assets` adds a binary `label` (event before the horizon) and trains a
+   classifier on it. `model_type: logreg` selects its columns by position; `logreg_by_name` is a
+   `Pipeline` whose `ColumnTransformer` selects them by name.
+2. `prepare_model_and_data_for_rai` runs in classification mode with `extra_features: '["site"]'`.
+   For `logreg_by_name` its log says that the selector hands the model a DataFrame.
+3. The registry components run at 0.21.0 with `use_model_dependency: false`, as pinned in
+   `classification-pipeline.yml`: constructor, error analysis and gather, plus an explanation step.
+
+```bash
+az ml job create --file tests/e2e-test-classification-pipeline.yml
+az ml job create --file tests/e2e-test-classification-pipeline.yml \
+  --set inputs.model_type=logreg_by_name --set inputs.model_name=e2e-test-classification-model-by-name
+```
+
+`e2e-test-surv-pipeline.yml` (above) and `e2e-test-classification-pipeline.yml` are the end-to-end
+regression tests for the default mode. They do not set the flag, so they must keep passing
+unchanged. The first covers survival mode without extra features, the second classification mode
+with them.
 
 ## Troubleshooting
 
