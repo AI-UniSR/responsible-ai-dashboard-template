@@ -15,7 +15,7 @@ from azure.identity import DefaultAzureCredential
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 import mltable
-from utils import load_data, generate_model_info_json, write_filtered_mltable, build_selector_pipeline, register_model, validate_and_clean_data
+from utils import load_data, generate_model_info_json, write_filtered_mltable, build_selector_pipeline, register_model, validate_and_clean_data, category_codes_error
 from risk_wrapper import SkSurvRiskWrapper, prepare_binary_classification_dataset
 import json
 
@@ -208,11 +208,15 @@ def main():
                 model_name=args.model_name,
                 model_version=args.model_version,
                 reference_df=df_train,
-                target_col=args.binary_label_name,
-                pandas_output=args.replay_predictions
+                target_col=args.binary_label_name
             )
             if not args.replay_predictions:
                 _ , out_model_version = register_model(model, out_model_name, input_example=df_train[features].iloc[:5,:])
+        else:
+            category_error = category_codes_error(model)
+            if category_error:
+                # The model gets the data as read, without its 'category' dtypes: warn only, as before
+                print(f"Warning: {category_error}")
     else:
         raise ValueError("Either provide all of time_column, event_column, time_horizon for survival mode, or none of them for classification mode.")
     

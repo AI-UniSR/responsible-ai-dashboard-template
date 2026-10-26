@@ -156,11 +156,16 @@ def write_filtered_mltable(df, features, target_col, output_dir):
 
 
 
-def build_selector_pipeline(model_name, model_version, reference_df, target_col, pandas_output=False):
+def build_selector_pipeline(model_name, model_version, reference_df, target_col):
     """Return a sklearn Pipeline that filters extra columns before model prediction.
 
-    With pandas_output=True (used by prediction replay) the model receives a DataFrame with its own
-    column names, as the survival branch does, so models that select columns by name also work.
+    The selector hands the model a numpy array. A model that cannot predict from that array (for
+    example a pipeline that selects its columns by name) gets a DataFrame with its own column names
+    instead, as in the survival branch. Every model that can predict from the array keeps it: other
+    RAI tools rely on that (dice-ml's object-dtype frames, which XGBoost and LightGBM reject as a
+    DataFrame, are fine as an array). LightGBM and XGBoost models whose categories the array would
+    misread (see category_codes_error) are refused when their names are a booster's numpy.str_, which
+    failed before; otherwise, as before, they only get a warning.
     """
     model_uri = f"models:/{model_name}/{model_version}"
     model = mlflow.sklearn.load_model(model_uri)
@@ -168,26 +173,124 @@ def build_selector_pipeline(model_name, model_version, reference_df, target_col,
     if not hasattr(model, "feature_names_in_"):
         raise AttributeError("Model has no attribute 'feature_names_in_'.")
 
-    used_features = list(model.feature_names_in_)
-    if pandas_output:
-        selector = ColumnTransformer(
-            [("keep", "passthrough", used_features)],
-            remainder="drop",
-            verbose_feature_names_out=False,
-        )
-        selector.set_output(transform="pandas")
-    else:
-        selector = ColumnTransformer(
-            [("keep", "passthrough", used_features)],
-            remainder="drop"
-        )
+    category_error = category_codes_error(model)
+    if category_error:
+        if any(type(name) is not str for name in model.feature_names_in_):
+            # numpy.str_ names (a booster's, see below) failed before plain-string names: refuse
+            # these models rather than let them through with wrong scores
+            raise ValueError(category_error)
+        print(f"Warning: {category_error}")
 
-    selector.fit(reference_df.drop(columns=[target_col], errors="ignore"))
+    # str(), as in the survival branch: LightGBM (>= 4.5) and XGBoost name their features with
+    # numpy.str_, which scikit-learn's ColumnTransformer rejects ("No valid specification").
+    used_features = [str(f) for f in model.feature_names_in_]
+    X_ref = reference_df.drop(columns=[target_col], errors="ignore")
+    selector = ColumnTransformer(
+        [("keep", "passthrough", used_features)],
+        remainder="drop"
+    )
 
-    return Pipeline([
+    selector.fit(X_ref)
+
+    pipeline = Pipeline([
         ("selector", selector),
         ("model", model)
     ])
+    error = _prediction_error(pipeline, X_ref)
+    if error is None:
+        return pipeline
+
+    by_name = ColumnTransformer(
+        [("keep", "passthrough", used_features)],
+        remainder="drop",
+        verbose_feature_names_out=False,
+    )
+    by_name.set_output(transform="pandas")
+    by_name.fit(X_ref)
+    by_name_pipeline = Pipeline([
+        ("selector", by_name),
+        ("model", model)
+    ])
+    by_name_error = _prediction_error(by_name_pipeline, X_ref)
+    if by_name_error is not None:
+        # Neither works: keep the original selector, so the model fails as it did before (in the RAI
+        # constructor, or here when replay computes the predictions).
+        print(f"Warning: the model cannot predict on the training rows "
+              f"(numpy array: {error}; DataFrame: {by_name_error}).")
+        return pipeline
+    print(f"The model cannot predict from a numpy array ({error}); "
+          "the selector hands it a DataFrame with its own column names.")
+    return by_name_pipeline
+
+
+def _prediction_error(pipeline, X, n_rows=5):
+    """Return the error the pipeline raises on the first rows of X, or None if it predicts."""
+    rows = X.head(n_rows)
+    try:
+        pipeline.predict(rows)
+        if hasattr(pipeline, "predict_proba"):
+            pipeline.predict_proba(rows)
+    except Exception as error:
+        return f"{type(error).__name__}: {error}"
+    return None
+
+
+def category_codes_error(model):
+    """Describe a LightGBM or XGBoost estimator in model that reads raw values as category codes
+    without a check, or return None.
+
+    The template never rebuilds pandas 'category' dtypes, so these boosters get the raw values and read
+    them as category codes, which is right only when the categories are exactly 0..k-1. LightGBM keeps
+    its categories, so 0..k-1 passes; XGBoost before 3.1 does not, so any categorical feature is flagged.
+    """
+    for booster in _boosters(model):
+        library = _booster_library(booster)
+        try:
+            if library == "lightgbm":
+                for categories in getattr(booster.booster_, "pandas_categorical", None) or []:
+                    if list(categories) != list(range(len(categories))):
+                        return (f"LightGBM model fitted on pandas 'category' columns whose categories are "
+                                f"{list(categories)[:5]}, not 0..k-1: it reads the raw values it gets as "
+                                "category codes, so it would score wrongly. Before training, recode those "
+                                "columns so that the categories are exactly 0..k-1.")
+            elif "c" in (booster.get_booster().feature_types or []):
+                return ("XGBoost model with categorical features (pandas 'category' columns or feature_types "
+                        "'c'): it reads the raw values it gets as category codes, which the component cannot "
+                        "check. Before training, encode those columns as plain numeric columns.")
+        except Exception:
+            continue  # not fitted, e.g. the template a search object keeps next to best_estimator_
+    return None
+
+
+def _booster_library(estimator):
+    """'lightgbm' or 'xgboost' if the estimator's class comes from that library, else None."""
+    for cls in type(estimator).__mro__:
+        library = cls.__module__.split(".")[0]
+        if library in ("lightgbm", "xgboost"):
+            return library
+    return None
+
+
+def _boosters(model, depth=0):
+    """The LightGBM and XGBoost estimators in model: the model itself, or estimators it calls (Pipeline
+    steps, a search's best_estimator_, calibration and ensemble members)."""
+    if _booster_library(model):
+        return [model]
+    if depth > 5:
+        return []
+    found = []
+    for attribute in ("steps", "best_estimator_", "calibrated_classifiers_", "estimator", "estimators_",
+                      "final_estimator_"):
+        try:
+            value = getattr(model, attribute, None)
+        except Exception:
+            value = None
+        for item in value if isinstance(value, (list, tuple)) else [value]:
+            if isinstance(item, tuple):  # Pipeline steps are (name, estimator)
+                item = item[-1]
+            if item is not None and not isinstance(item, str):
+                found += _boosters(item, depth + 1)
+    return found
 
 def register_model(mlflow_model, model_name, input_example=None, code_paths=None):
     """
