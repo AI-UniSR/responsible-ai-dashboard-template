@@ -1,0 +1,124 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+
+experiment_name: e2e-test-rai-classification
+type: pipeline
+display_name: "E2E Test - RAI Classification Pipeline with extra features"
+description: >
+  End-to-end test of the default mode in classification with extra features, the path that
+  classification-pipeline.yml runs. A classifier is trained on synthetic data and run through the
+  registry components 0.21.0, as pinned there (plus an explanation step). With model_type logreg the model
+  selects its columns by position and keeps the numpy selector; with logreg_by_name it selects them
+  by name, and the prepare step's log says that the selector hands it a DataFrame instead.
+
+settings:
+  default_compute: azureml:clusterprdwe-ogreif
+
+inputs:
+  # Model configuration: logreg (columns by position) or logreg_by_name (by name)
+  model_name: "e2e-test-classification-model"
+  model_type: logreg
+  binary_label_name: 'label'
+
+  # Data generation parameters (label = event before time_horizon)
+  time_horizon: 12
+  n_samples: 500
+  test_size: 0.3
+  random_state: 42
+
+jobs:
+  # ============================================================================
+  # Step 1: Generate synthetic assets (data with a binary label + classifier)
+  # ============================================================================
+  prepare_e2e_assets:
+    type: command
+    component: prepare_e2e_survival_assets/component.yml
+    inputs:
+      model_name: ${{parent.inputs.model_name}}
+      time_horizon: ${{parent.inputs.time_horizon}}
+      n_samples: ${{parent.inputs.n_samples}}
+      test_size: ${{parent.inputs.test_size}}
+      random_state: ${{parent.inputs.random_state}}
+      model_type: ${{parent.inputs.model_type}}
+      label_column: ${{parent.inputs.binary_label_name}}
+      audit_column: site
+    outputs:
+      train_data:
+        type: mltable
+      test_data:
+        type: mltable
+      model_info_path:
+        type: uri_folder
+      test_assets:
+        type: uri_folder
+
+  # ============================================================================
+  # Step 2: Prepare model and data for RAI (classification mode with extra features)
+  # ============================================================================
+  prepare_model_and_data_for_rai:
+    type: command
+    component: ../components/prepare_model_and_data_for_rai/component.yml
+    inputs:
+      model_name: ${{parent.inputs.model_name}}
+      model_info_path_input: ${{parent.jobs.prepare_e2e_assets.outputs.model_info_path}}
+      binary_label_name: ${{parent.inputs.binary_label_name}}
+      train_data: ${{parent.jobs.prepare_e2e_assets.outputs.train_data}}
+      test_data: ${{parent.jobs.prepare_e2e_assets.outputs.test_data}}
+      # site is audit-only: the selector drops it before the model
+      extra_features: '["site"]'
+    outputs:
+      train_data_out:
+        type: mltable
+      test_data_out:
+        type: mltable
+      model_info_path:
+
+  # ============================================================================
+  # Steps 3-6: registry components, as pinned in classification-pipeline.yml
+  # ============================================================================
+  create_rai_job:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_insight_constructor/versions/0.21.0
+    limits:
+      timeout: 3600
+    inputs:
+      title: "E2E Test - RAI Classification Dashboard"
+      task_type: classification
+      model_info_path: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.model_info_path}}
+      train_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.train_data_out}}
+      test_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.test_data_out}}
+      target_column_name: ${{parent.inputs.binary_label_name}}
+      categorical_column_names: '["sex", "tumor", "site"]'
+      classes: '[false, true]'
+      # scikit-learn models load in the RAI environment as they are
+      use_model_dependency: false
+    outputs:
+      rai_insights_dashboard:
+
+  error_analysis:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_erroranalysis/versions/0.21.0
+    limits:
+      timeout: 7200
+    inputs:
+      rai_insights_dashboard: ${{parent.jobs.create_rai_job.outputs.rai_insights_dashboard}}
+      max_depth: 3
+      filter_features: '[]'
+
+  explanation:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_explanation/versions/0.21.0
+    limits:
+      timeout: 7200
+    inputs:
+      comment: "Explanations of the registered classifier"
+      rai_insights_dashboard: ${{parent.jobs.create_rai_job.outputs.rai_insights_dashboard}}
+
+  gather_insights:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.21.0
+    limits:
+      timeout: 7200
+    inputs:
+      constructor: ${{parent.jobs.create_rai_job.outputs.rai_insights_dashboard}}
+      insight_1: ${{parent.jobs.error_analysis.outputs.error_analysis}}
+      insight_2: ${{parent.jobs.explanation.outputs.explanation}}

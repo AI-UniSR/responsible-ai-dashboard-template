@@ -1,7 +1,7 @@
 $schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
 name: prepare_e2e_survival_assets
 display_name: "Prepare E2E Survival Test Assets"
-version: 1.1.0
+version: 1.2.0
 type: command
 description: >
   Generate synthetic survival data, train a GradientBoostingSurvivalAnalysis model,
@@ -48,11 +48,17 @@ inputs:
   model_type:
     type: string
     optional: true
-    description: gbsa (default) or gbsa_impute (median imputer + gbsa, handles missing values)
+    description: >-
+      gbsa (default), gbsa_impute (median imputer + gbsa, handles missing values), or a classifier for
+      classification mode trained on label_column: logreg (columns by position) or logreg_by_name (by name)
   audit_column:
     type: string
     optional: true
     description: Name of an audit-only string column to add (not used by the model)
+  label_column:
+    type: string
+    optional: true
+    description: Classifiers only, name of the binary label column to add (default label)
 
 outputs:
   train_data:
@@ -83,6 +89,7 @@ command: >-
   $[[--remove_missing ${{inputs.remove_missing}}]]
   $[[--model_type ${{inputs.model_type}}]]
   $[[--audit_column ${{inputs.audit_column}}]]
+  $[[--label_column ${{inputs.label_column}}]]
   --train_data ${{outputs.train_data}}
   --test_data ${{outputs.test_data}}
   --model_info_path ${{outputs.model_info_path}}

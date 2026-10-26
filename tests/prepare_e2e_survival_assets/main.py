@@ -15,10 +15,16 @@ import numpy as np
 import pandas as pd
 import yaml
 import mlflow
+from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sksurv.ensemble import GradientBoostingSurvivalAnalysis
+
+# Classifiers for the classification-mode e2e (trained on a binary label column instead of tte/event)
+CLASSIFIER_TYPES = ("logreg", "logreg_by_name")
 
 
 # ============================================================================
@@ -275,6 +281,24 @@ def train_survival_model(df_train: pd.DataFrame, feature_cols: list, time_col: s
     return model
 
 
+def train_classifier(df_train: pd.DataFrame, feature_cols: list, label_col: str, model_type: str):
+    """
+    Train a classifier for the classification-mode e2e, fitted on the DataFrame.
+
+    model_type: "logreg" selects its columns by position (the RAI selector keeps its numpy array);
+        "logreg_by_name" is a Pipeline whose ColumnTransformer selects columns by name (the RAI
+        selector must hand it a DataFrame)
+    """
+    if model_type == "logreg_by_name":
+        numeric = [c for c in feature_cols if c not in ("sex", "tumor")]
+        pre = ColumnTransformer([("num", StandardScaler(), numeric),
+                                 ("cat", OneHotEncoder(handle_unknown="ignore"), ["sex", "tumor"])])
+        model = Pipeline([("pre", pre), ("clf", LogisticRegression(max_iter=1000))])
+    else:
+        model = LogisticRegression(max_iter=1000)
+    return model.fit(df_train[feature_cols], df_train[label_col])
+
+
 def calculate_threshold_percentile(model, df: pd.DataFrame, feature_cols: list, percentile: float = 66) -> float:
     """
     Calculate the threshold based on percentile of risk predictions on the given DataFrame.
@@ -395,10 +419,13 @@ def parse_args():
                         help="Comma-separated list of columns to check for NaN before dropping rows. Use '*' or 'all' to check all columns. Empty list preserves all rows.")
     
     # Prediction replay tests
-    parser.add_argument("--model_type", type=str, default="gbsa", choices=["gbsa", "gbsa_impute"],
-                        help="gbsa, or gbsa_impute (median imputer + gbsa, handles missing values)")
+    parser.add_argument("--model_type", type=str, default="gbsa", choices=["gbsa", "gbsa_impute"] + list(CLASSIFIER_TYPES),
+                        help="gbsa, gbsa_impute (median imputer + gbsa, handles missing values), or a classifier "
+                             "for classification mode: logreg (columns by position) or logreg_by_name (by name)")
     parser.add_argument("--audit_column", type=str, default=None,
                         help="Name of an audit-only string column to add (not used by the model)")
+    parser.add_argument("--label_column", type=str, default="label",
+                        help="Classifiers only: binary label column to add (event before time_horizon)")
 
     # Outputs
     parser.add_argument("--train_data", type=str, required=True, help="Output path for training MLTable")
@@ -444,6 +471,10 @@ def main():
         audit_rng = np.random.RandomState(args.random_state + 1)
         df[args.audit_column] = audit_rng.choice(["north", "south", "centre"], len(df))
         print(f"Added audit-only column '{args.audit_column}'")
+    classifier = args.model_type in CLASSIFIER_TYPES
+    if classifier:
+        df[args.label_column] = (df[event_col] & (df[time_col] <= args.time_horizon)).astype(int)
+        print(f"Added label column '{args.label_column}' (rate {df[args.label_column].mean():.2%})")
     print(f"Generated {len(df)} samples")
     print(f"Event rate: {df[event_col].mean():.2%}")
     print(f"Median time-to-event: {df[time_col].median():.1f} months")
@@ -468,15 +499,22 @@ def main():
     df_train = validate_and_clean_data(df_train, remove_missing=remove_missing_list, stage_name="training")
     df_test = validate_and_clean_data(df_test, remove_missing=remove_missing_list, stage_name="test")
     
-    # Step 3: Train survival model
-    print("\n[Step 3] Training GradientBoostingSurvivalAnalysis model...")
-    model = train_survival_model(df_train, feature_cols, time_col, event_col, model_type=args.model_type)
-    print("Model trained successfully")
-    
-    # Step 4: Calculate threshold (66th percentile on training set)
-    print("\n[Step 4] Calculating threshold (66th percentile on training set)...")
-    threshold = calculate_threshold_percentile(model, df_train, feature_cols, percentile=66)
-    print(f"Threshold (66th percentile): {threshold:.4f}")
+    if classifier:
+        # Step 3: Train classifier (classification mode); the threshold below is unused there
+        print(f"\n[Step 3] Training classifier ({args.model_type})...")
+        model = train_classifier(df_train, feature_cols, args.label_column, args.model_type)
+        print("Model trained successfully")
+        threshold = 0.5
+    else:
+        # Step 3: Train survival model
+        print("\n[Step 3] Training GradientBoostingSurvivalAnalysis model...")
+        model = train_survival_model(df_train, feature_cols, time_col, event_col, model_type=args.model_type)
+        print("Model trained successfully")
+
+        # Step 4: Calculate threshold (66th percentile on training set)
+        print("\n[Step 4] Calculating threshold (66th percentile on training set)...")
+        threshold = calculate_threshold_percentile(model, df_train, feature_cols, percentile=66)
+        print(f"Threshold (66th percentile): {threshold:.4f}")
     
     # Step 5: Register model with MLflow
     print("\n[Step 5] Registering model with MLflow...")
