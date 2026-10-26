@@ -6,7 +6,7 @@ display_name: "E2E Test - RAI Classification Pipeline with extra features"
 description: >
   End-to-end test of the default mode in classification with extra features, the path that
   classification-pipeline.yml runs. A classifier is trained on synthetic data and run through the
-  registry components 0.21.0, as pinned there (plus an explanation step). With model_type logreg the model
+  registry components as pinned there (0.21.0, gather 0.20.0), plus an explanation step. With model_type logreg the model
   selects its columns by position and keeps the numpy selector; with logreg_by_name it selects them
   by name, and the prepare step's log says that the selector hands it a DataFrame instead.
 
@@ -115,7 +115,8 @@ jobs:
 
   gather_insights:
     type: command
-    component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.21.0
+    # 0.20.0, as in classification-pipeline.yml (interactive dashboard in Studio, see the main README)
+    component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.20.0
     limits:
       timeout: 7200
     inputs:

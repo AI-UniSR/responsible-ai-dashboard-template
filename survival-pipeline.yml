@@ -79,7 +79,9 @@ jobs:
       
   gather_01:
       type: command
-      component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.21.0
+      # 0.20.0 on purpose: Studio's interactive dashboard (Connect compute) runs in gather's image, and only
+      # 0.20.0 has one with azureml-core (README, "Interactive dashboard in Azure ML Studio")
+      component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.20.0
       limits:
         timeout: 7200
       inputs:

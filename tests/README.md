@@ -196,11 +196,13 @@ The last scenarios check the default mode's classification selector (no replay) 
 - XGBoost is checked as well where installed. Images 26, 28 and 39 do not have it, and the final
   line lists the skipped scenarios.
 
-Run it for each RAI environment version your pipelines use (26 for the 0.21.0 components, 28 for
-0.22.0), and once with XGBoost installed:
+Run it for each RAI environment version your pipelines use (24 for gather 0.20.0, 26 for the 0.21.0
+components, 28 for 0.22.0), and once with XGBoost installed:
 
 ```bash
 az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml
+az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml \
+  --set environment=azureml://registries/azureml/environments/responsibleai-tabular/versions/24
 az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml \
   --set environment=azureml://registries/azureml/environments/responsibleai-tabular/versions/26
 az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml \
@@ -256,8 +258,9 @@ This tests the default mode in classification with an extra feature, the path
    `Pipeline` whose `ColumnTransformer` selects them by name.
 2. `prepare_model_and_data_for_rai` runs in classification mode with `extra_features: '["site"]'`.
    For `logreg_by_name` its log says that the selector hands the model a DataFrame.
-3. The registry components run at 0.21.0 with `use_model_dependency: false`, as pinned in
-   `classification-pipeline.yml`: constructor, error analysis and gather, plus an explanation step.
+3. The registry components run as pinned in `classification-pipeline.yml`, with
+   `use_model_dependency: false`: constructor and error analysis at 0.21.0, gather at 0.20.0, plus an
+   explanation step at 0.21.0.
 
 ```bash
 az ml job create --file tests/e2e-test-classification-pipeline.yml

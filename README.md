@@ -232,6 +232,7 @@ ICE plots and what-if counterfactuals.
 **For the interactive dashboard with the 0.21.0 or 0.22.0 components, set
 `rai_tabular_insight_gather` to 0.20.0.** The other steps keep their version. This was confirmed in
 Studio on 2026-10-26, with a replay dashboard built with the 0.22.0 components and gather 0.20.0.
+The template's pipelines already do this: their gather step is at 0.20.0, the other steps at 0.21.0.
 
 ```yaml
   gather_01:
@@ -248,8 +249,10 @@ Why:
 - **Confirmed in Studio**: with gather at 0.20.0 and every other step at 0.22.0, which runs in
   `:28`, the dashboard opens interactively. So Studio takes the image from gather, the only step in
   `:24`, whose dashboard output its script downloads.
-- Gather 0.20.0 reads the outputs of the 0.22.0 steps without problems, because all of them use
-  responsibleai 0.36.0. The combination 0.21.0 plus gather 0.20.0 was not run.
+- Gather 0.20.0 reads the outputs of the 0.21.0 and 0.22.0 steps without problems, because all of
+  them use responsibleai 0.36.0. These combinations were run end to end:
+  - replay with the 0.22.0 steps, and with the 0.21.0 steps;
+  - the default mode with the 0.21.0 steps, in survival and in classification with extra features.
 
 The dashboard's model must also load in that image:
 - **A replay dashboard always loads**, because it needs only ml-wrappers. Everything then works live
@@ -352,7 +355,7 @@ jobs:
 
   create_rai_job_dev:
     type: command
-    # the same version as your other rai_tabular_* steps (the template pins 0.21.0)
+    # the same version as your other rai_tabular_* steps (the template pins 0.21.0, gather 0.20.0)
     component: azureml://registries/azureml/components/rai_tabular_insight_constructor/versions/0.22.0
     inputs:
       # ... the usual inputs ...
@@ -366,8 +369,8 @@ interactive dashboard (confirmed in Studio; see
   (`tests/e2e-test-replay-pipeline.yml`), with every step at 0.20.0, and with 0.22.0 plus gather
   0.20.0. The last two are the same pipeline with the versions changed (commands in
   [tests/README.md](tests/README.md)).
-- **Inside the images.** The replay model was also checked inside the images of 0.21.0
-  (`responsibleai-tabular:26`), 0.22.0 (`:28`) and `:39` (`tests/rai_env/`).
+- **Inside the images.** The replay model was also checked inside the images of gather 0.20.0
+  (`responsibleai-tabular:24`), 0.21.0 (`:26`), 0.22.0 (`:28`) and `:39` (`tests/rai_env/`).
 
 `tests/replay_assets/prepare_model_and_data_for_rai.modern.yml` is such a copy, and
 `tests/unit/test_component_variants.py` keeps it in sync with the original.
@@ -487,8 +490,8 @@ RAI components keep their own rules, independent of replay:
     are byte-identical;
   - the replay builder and loader.
 - **`tests/rai_env/`:**
-  - the replay model loaded inside `responsibleai-tabular` versions 26, 28 and 39, and run through
-    the RAIInsights steps of the pipeline;
+  - the replay model loaded inside `responsibleai-tabular` versions 24, 26, 28 and 39, and run
+    through the RAIInsights steps of the pipeline;
   - the same for the default mode's classification selector, including real dice-ml counterfactuals
     for LightGBM, and the refusal of a LightGBM model whose categories are not 0..k-1, on its own,
     in a Pipeline and inside CalibratedClassifierCV.
@@ -499,7 +502,8 @@ RAI components keep their own rules, independent of replay:
     score card;
   - followed by a final assertion step.
 - **`tests/e2e-test-classification-pipeline.yml`:** the default mode in classification with an
-  extra feature, through the 0.21.0 components as in `classification-pipeline.yml`. It uses a model
+  extra feature, through the components pinned in `classification-pipeline.yml` (0.21.0, gather
+  0.20.0). It uses a model
   that selects its columns by position, and one that selects them by name.
 
 See [tests/README.md](tests/README.md).

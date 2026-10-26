@@ -124,7 +124,8 @@ jobs:
   # ============================================================================
   gather_insights:
     type: command
-    component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.21.0
+    # 0.20.0, as in survival-pipeline.yml (interactive dashboard in Studio, see the main README)
+    component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.20.0
     limits:
       timeout: 7200
     inputs:
