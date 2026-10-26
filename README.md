@@ -230,8 +230,8 @@ compute instance ("Connect compute"): error analysis with other settings or coho
 ICE plots and what-if counterfactuals.
 
 **For the interactive dashboard with the 0.21.0 or 0.22.0 components, set
-`rai_tabular_insight_gather` to 0.20.0.** The other steps keep their version. This is not yet
-confirmed in Studio itself.
+`rai_tabular_insight_gather` to 0.20.0.** The other steps keep their version. This was confirmed in
+Studio on 2026-10-26, with a replay dashboard built with the 0.22.0 components and gather 0.20.0.
 
 ```yaml
   gather_01:
@@ -239,20 +239,17 @@ confirmed in Studio itself.
     component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.20.0
 ```
 
-It rests on the following:
+Why:
 - **Observed**, in Studio's terminal output for a dashboard built with the 0.22.0 components (all
   steps): Studio started `responsibleai-tabular:28` and typed a startup script whose first line
   imports `azureml.core`, the v1 SDK. The import failed, and the dashboard never loaded.
 - **Read**, in the image definitions: only the images up to `:25` contain azureml-core. Gather
   0.20.0 runs in `:24`, 0.21.0 in `:26` and 0.22.0 in `:28`.
-- **Inferred**: Studio uses the image of the gather job, whose dashboard output its script
-  downloads. Every 0.22.0 step runs in `:28`, so the observation alone cannot tell which step's
-  image it is.
-- **Emulated** in `:24`, not in Studio: the import, the dashboard load and the backend calls, but not
-  Studio's package upgrade, sign-in or download.
-  - Run on replay dashboards built with every step at 0.20.0, and with 0.22.0 plus gather 0.20.0.
-  - Gather 0.20.0 read the outputs of the 0.22.0 steps without problems: all use responsibleai
-    0.36.0.
+- **Confirmed in Studio**: with gather at 0.20.0 and every other step at 0.22.0, which runs in
+  `:28`, the dashboard opens interactively. So Studio takes the image from gather, the only step in
+  `:24`, whose dashboard output its script downloads.
+- Gather 0.20.0 reads the outputs of the 0.22.0 steps without problems, because all of them use
+  responsibleai 0.36.0. The combination 0.21.0 plus gather 0.20.0 was not run.
 
 The dashboard's model must also load in that image:
 - **A replay dashboard always loads**, because it needs only ml-wrappers. Everything then works live
@@ -363,7 +360,7 @@ jobs:
 ```
 
 Use the same version for every `rai_tabular_*` step, except gather at 0.20.0 if you want the
-interactive dashboard (not yet confirmed in Studio; see
+interactive dashboard (confirmed in Studio; see
 [Interactive dashboard in Azure ML Studio](#interactive-dashboard-in-azure-ml-studio)).
 - **End to end.** Replay was verified with every step at 0.22.0
   (`tests/e2e-test-replay-pipeline.yml`), with every step at 0.20.0, and with 0.22.0 plus gather
@@ -401,7 +398,7 @@ The model's environment needs the model's own libraries, plus what the component
 | Constructor | yes | replay e2e, RAI-environment check |
 | Error analysis (tree) | yes | replay e2e, RAI-environment check |
 | Error analysis heatmap and cohort filters | yes for the heatmap; cohort filters expected (they only select stored rows; not run) | heatmap: an emulation of Studio's backend calls in `responsibleai-tabular` 24, 26, 27, 28 and 39 (not in this repository) |
-| Interactive dashboard in Studio (connect compute) | expected with gather 0.20.0 (not yet confirmed in Studio), except ICE | an emulation of the startup in `:24`, not Studio |
+| Interactive dashboard in Studio (connect compute) | yes with gather 0.20.0, except ICE (it predicts on new rows) | Studio (0.22.0 components with gather 0.20.0), and an emulation of the startup in `:24` |
 | Explanations (feature importance) | yes, numeric NaN included | replay e2e, RAI-environment check |
 | Data balance | not affected (never uses the model) | RAI-environment check (asserts the measures are computed) |
 | Causal analysis | expected (never uses the model; refuses NaN) | not run |
