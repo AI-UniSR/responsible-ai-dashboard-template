@@ -172,6 +172,21 @@ def test_audit_only_columns_do_not_alter_predictions():
     assert np.allclose(pipeline.predict_proba(X), pipeline.predict_proba(X_perturbed))
 
 
+def test_pipeline_with_wrapper_predicts_without_refit():
+    # The selector -> wrapper Pipeline is assembled from fitted parts and never fit as a whole;
+    # scikit-learn >= 1.8 then checks that its last step is fitted before predicting.
+    from sklearn.utils.validation import check_is_fitted
+
+    pipeline, df_train, model_features, extra_features = _build_survival_extra_features_pipeline()
+    X = df_train[model_features + extra_features]
+    check_is_fitted(pipeline.named_steps["model"])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        proba = pipeline.predict_proba(X)
+    assert proba.shape == (len(X), 2)
+    assert not [w for w in caught if "fitted" in str(w.message).lower()]
+
+
 def test_wrapped_and_raw_rankings_are_identical():
     pipeline, df_train, model_features, extra_features = _build_survival_extra_features_pipeline()
     X = df_train[model_features + extra_features]

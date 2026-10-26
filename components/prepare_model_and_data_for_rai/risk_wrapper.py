@@ -26,6 +26,11 @@ class SkSurvRiskWrapper(BaseEstimator, ClassifierMixin):
     def fit(self, X, y=None):
         return self
 
+    def __sklearn_is_fitted__(self):
+        # The wrapper has no fitted state of its own: it wraps an already fitted model. Without
+        # this, scikit-learn >= 1.8 Pipelines (selector -> wrapper) raise NotFittedError on predict.
+        return True
+
     def predict_proba(self, X):
         s = np.asarray(self.model.predict(X), dtype=float)
         if not np.all(np.isfinite(s)):
