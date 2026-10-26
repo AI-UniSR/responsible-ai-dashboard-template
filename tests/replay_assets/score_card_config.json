@@ -1,0 +1,26 @@
+{
+  "Model": {
+    "ModelName": "E2E replay survival model",
+    "ModelType": "Classification",
+    "ModelSummary": "Synthetic survival model trained on a modern stack (Python 3.12, scikit-learn 1.9, scikit-survival 0.28), turned into a 12-month classifier and scored through prediction replay."
+  },
+  "Metrics": {
+    "accuracy_score": {
+      "threshold": ">=0.6"
+    },
+    "recall_score": {},
+    "precision_score": {},
+    "f1_score": {}
+  },
+  "FeatureImportance": {
+    "top_n": 6
+  },
+  "DataExplorer": {
+    "features": ["sex", "tumor", "site"]
+  },
+  "Fairness": {
+    "metric": ["accuracy_score", "selection_rate"],
+    "sensitive_features": ["sex", "site"],
+    "fairness_evaluation_kind": "difference"
+  }
+}

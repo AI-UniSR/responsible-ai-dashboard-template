@@ -1,0 +1,29 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+name: check_replay_dashboard
+display_name: "Check RAI dashboard built from a replay model"
+version: 1.0.0
+type: command
+description: >
+  Assertion step of the prediction replay e2e test. Loads the gathered dashboard in the RAI
+  environment and checks the replay model, its predictions on the reloaded data, the insights and
+  (optionally) the score card.
+
+inputs:
+  dashboard:
+    type: uri_folder
+  score_card:
+    type: uri_folder
+    optional: true
+  expected_model_python:
+    type: string
+    optional: true
+    description: Python version prefix (e.g. "3.12") the replay predictions must have been computed with
+
+code: .
+environment: azureml://registries/azureml/environments/responsibleai-tabular/versions/28
+
+command: >-
+  python check.py
+  --dashboard ${{inputs.dashboard}}
+  $[[--score_card ${{inputs.score_card}}]]
+  $[[--expected_model_python ${{inputs.expected_model_python}}]]

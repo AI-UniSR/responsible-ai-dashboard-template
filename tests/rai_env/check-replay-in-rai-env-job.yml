@@ -1,0 +1,15 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+experiment_name: e2e-test-rai-replay
+display_name: "Prediction replay check inside the RAI environment"
+description: >
+  Builds replay models with the component's code, loads them the way the RAI components do and
+  runs the RAIInsights steps of the pipeline (constructor checks, error analysis, explanations,
+  the gather and score-card save/load cycles, get_data). Run it once per RAI environment version
+  the pipelines use, e.g. with --set environment=azureml://registries/azureml/environments/responsibleai-tabular/versions/39
+
+code: ../..
+command: python tests/rai_env/check_replay_in_rai_env.py
+# The environment of the rai_tabular_* 0.22.0 registry components
+environment: azureml://registries/azureml/environments/responsibleai-tabular/versions/28
+compute: azureml:clusterprdwe-ogreif

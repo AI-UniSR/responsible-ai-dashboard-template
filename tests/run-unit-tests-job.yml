@@ -1,0 +1,12 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+type: command
+experiment_name: unit-tests-rai-template
+display_name: "Unit tests: prepare_model_and_data_for_rai"
+description: >
+  Runs tests/unit with pytest in the component's environment. To run them in the modern-stack
+  environment used for prediction replay, add --set environment=azureml:rai-replay-modern-test:1
+
+code: ..
+command: python -m pytest tests/unit -v -p no:cacheprovider
+environment: azureml:rai-survival-test:13
+compute: azureml:clusterprdwe-ogreif

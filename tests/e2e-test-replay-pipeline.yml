@@ -1,0 +1,166 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+
+experiment_name: e2e-test-rai-replay
+type: pipeline
+display_name: "E2E Test - RAI prediction replay (modern-stack survival model)"
+description: >
+  End-to-end test of prediction replay (replay_predictions: true). A survival model is trained in an
+  environment the curated RAI environment cannot load (Python 3.12, numpy 2, pandas 2,
+  scikit-learn 1.9, scikit-survival 0.28). Missing values are kept (the model imputes them) and an
+  audit-only extra feature is added. The unmodified Microsoft RAI components then build error
+  analysis, explanations, the dashboard and the score card from the replayed predictions, and a
+  last step checks the result.
+
+settings:
+  default_compute: azureml:clusterprdwe-ogreif
+
+inputs:
+  model_name: "e2e-test-replay-survival-model"
+
+  # Survival analysis parameters
+  time_column: tte
+  event_column: event
+  time_horizon: 12
+  binary_label_name: 'label'
+
+  # Data generation parameters
+  n_samples: 500
+  test_size: 0.3
+  random_state: 42
+
+  # Missing values are kept: the model (median imputer + gbsa) handles them
+  missing_value_columns: "age,bmi,biomarker_1,biomarker_2"
+  missing_value_fraction: 0.15
+
+  # Audit-only column, passed to RAI as an extra feature
+  audit_column: site
+
+  score_card_config:
+    type: uri_file
+    path: ./replay_assets/score_card_config.json
+    mode: download
+
+jobs:
+  # ============================================================================
+  # Step 1: Synthetic data + survival model, trained in the modern-stack environment
+  # ============================================================================
+  prepare_e2e_survival_assets:
+    type: command
+    # A pipeline node cannot override a component's environment: use the copy pinned to the modern stack
+    component: replay_assets/prepare_e2e_survival_assets.modern.yml
+    inputs:
+      model_name: ${{parent.inputs.model_name}}
+      time_horizon: ${{parent.inputs.time_horizon}}
+      n_samples: ${{parent.inputs.n_samples}}
+      test_size: ${{parent.inputs.test_size}}
+      random_state: ${{parent.inputs.random_state}}
+      missing_value_columns: ${{parent.inputs.missing_value_columns}}
+      missing_value_fraction: ${{parent.inputs.missing_value_fraction}}
+      model_type: gbsa_impute
+      audit_column: ${{parent.inputs.audit_column}}
+    outputs:
+      train_data:
+        type: mltable
+      test_data:
+        type: mltable
+      model_info_path:
+        type: uri_folder
+      test_assets:
+        type: uri_folder
+
+  # ============================================================================
+  # Step 2: Prepare model and data for RAI, in replay mode, in the model's environment
+  # ============================================================================
+  prepare_model_and_data_for_rai:
+    type: command
+    # The component, in the model's environment (copy of component.yml with only environment and code changed)
+    component: replay_assets/prepare_model_and_data_for_rai.modern.yml
+    inputs:
+      model_name: ${{parent.inputs.model_name}}
+      model_info_path_input: ${{parent.jobs.prepare_e2e_survival_assets.outputs.model_info_path}}
+      binary_label_name: ${{parent.inputs.binary_label_name}}
+      time_column: ${{parent.inputs.time_column}}
+      event_column: ${{parent.inputs.event_column}}
+      time_horizon: ${{parent.inputs.time_horizon}}
+      train_data: ${{parent.jobs.prepare_e2e_survival_assets.outputs.train_data}}
+      test_data: ${{parent.jobs.prepare_e2e_survival_assets.outputs.test_data}}
+      test_assets: ${{parent.jobs.prepare_e2e_survival_assets.outputs.test_assets}}
+      extra_features: '["site"]'
+      replay_predictions: true
+    outputs:
+      train_data_out:
+        type: mltable
+      test_data_out:
+        type: mltable
+      model_info_path:
+
+  # ============================================================================
+  # Steps 3-7: unmodified Microsoft RAI components
+  # ============================================================================
+  create_rai_job:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_insight_constructor/versions/0.22.0
+    limits:
+      timeout: 3600
+    inputs:
+      title: "E2E Test - RAI prediction replay"
+      task_type: classification
+      model_info_path: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.model_info_path}}
+      train_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.train_data_out}}
+      test_dataset: ${{parent.jobs.prepare_model_and_data_for_rai.outputs.test_data_out}}
+      target_column_name: ${{parent.inputs.binary_label_name}}
+      categorical_column_names: '["sex", "tumor", "site"]'
+      classes: '[false, true]'
+      # A replay model needs nothing installed: keep this false
+      use_model_dependency: false
+    outputs:
+      rai_insights_dashboard:
+
+  error_analysis:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_erroranalysis/versions/0.22.0
+    limits:
+      timeout: 7200
+    inputs:
+      rai_insights_dashboard: ${{parent.jobs.create_rai_job.outputs.rai_insights_dashboard}}
+      max_depth: 3
+      filter_features: '[]'
+
+  explanation:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_explanation/versions/0.22.0
+    limits:
+      timeout: 7200
+    inputs:
+      comment: "Explanations from replayed predictions"
+      rai_insights_dashboard: ${{parent.jobs.create_rai_job.outputs.rai_insights_dashboard}}
+
+  gather_insights:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_insight_gather/versions/0.22.0
+    limits:
+      timeout: 7200
+    inputs:
+      constructor: ${{parent.jobs.create_rai_job.outputs.rai_insights_dashboard}}
+      insight_1: ${{parent.jobs.error_analysis.outputs.error_analysis}}
+      insight_2: ${{parent.jobs.explanation.outputs.explanation}}
+
+  score_card:
+    type: command
+    component: azureml://registries/azureml/components/rai_tabular_score_card/versions/0.22.0
+    limits:
+      timeout: 3600
+    inputs:
+      dashboard: ${{parent.jobs.gather_insights.outputs.dashboard}}
+      pdf_generation_config: ${{parent.inputs.score_card_config}}
+
+  # ============================================================================
+  # Step 8: Assertions, in the RAI environment
+  # ============================================================================
+  check_replay_dashboard:
+    type: command
+    component: check_replay_dashboard/component.yml
+    inputs:
+      dashboard: ${{parent.jobs.gather_insights.outputs.dashboard}}
+      score_card: ${{parent.jobs.score_card.outputs.scorecard}}
+      expected_model_python: "3.12"

@@ -15,7 +15,9 @@ import numpy as np
 import pandas as pd
 import yaml
 import mlflow
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
 from sksurv.ensemble import GradientBoostingSurvivalAnalysis
 
 
@@ -225,7 +227,8 @@ def validate_and_clean_data(
 # ============================================================================
 # Model Training
 # ============================================================================
-def train_survival_model(df_train: pd.DataFrame, feature_cols: list, time_col: str, event_col: str):
+def train_survival_model(df_train: pd.DataFrame, feature_cols: list, time_col: str, event_col: str,
+                         model_type: str = "gbsa"):
     """
     Train a GradientBoostingSurvivalAnalysis model.
     
@@ -234,6 +237,8 @@ def train_survival_model(df_train: pd.DataFrame, feature_cols: list, time_col: s
         feature_cols: List of feature column names
         time_col: Name of time-to-event column
         event_col: Name of event indicator column
+        model_type: "gbsa" (default) or "gbsa_impute": the same model behind a median imputer,
+            fitted on the DataFrame, so it handles missing values itself
     
     Returns:
         Trained scikit-survival model
@@ -256,6 +261,12 @@ def train_survival_model(df_train: pd.DataFrame, feature_cols: list, time_col: s
         random_state=42
     )
     
+    if model_type == "gbsa_impute":
+        # feature_names_in_ comes from fitting on the DataFrame
+        pipeline = Pipeline([("impute", SimpleImputer(strategy="median")), ("model", model)])
+        pipeline.fit(df_train[feature_cols], y_train)
+        return pipeline
+
     model.fit(X_train, y_train)
     
     # Store feature names for compatibility with RAI wrapper
@@ -278,7 +289,7 @@ def calculate_threshold_percentile(model, df: pd.DataFrame, feature_cols: list, 
     Returns:
         Threshold value at the specified percentile
     """
-    X = df[feature_cols].values
+    X = df[feature_cols] if isinstance(model, Pipeline) else df[feature_cols].values
     risk_scores = model.predict(X)
     threshold = np.percentile(risk_scores, percentile)
     return float(threshold)
@@ -383,6 +394,12 @@ def parse_args():
     parser.add_argument("--remove_missing", type=str, default=None, 
                         help="Comma-separated list of columns to check for NaN before dropping rows. Use '*' or 'all' to check all columns. Empty list preserves all rows.")
     
+    # Prediction replay tests
+    parser.add_argument("--model_type", type=str, default="gbsa", choices=["gbsa", "gbsa_impute"],
+                        help="gbsa, or gbsa_impute (median imputer + gbsa, handles missing values)")
+    parser.add_argument("--audit_column", type=str, default=None,
+                        help="Name of an audit-only string column to add (not used by the model)")
+
     # Outputs
     parser.add_argument("--train_data", type=str, required=True, help="Output path for training MLTable")
     parser.add_argument("--test_data", type=str, required=True, help="Output path for test MLTable")
@@ -398,6 +415,9 @@ def main():
     print("=" * 80)
     print("E2E Test: Generate Synthetic Survival Assets")
     print("=" * 80)
+    import platform, sklearn, sksurv
+    print(f"Python {platform.python_version()}, numpy {np.__version__}, pandas {pd.__version__}, "
+          f"scikit-learn {sklearn.__version__}, scikit-survival {sksurv.__version__}, mlflow {mlflow.__version__}")
     
     # Define feature columns and survival columns
     feature_cols = ['age', 'bmi', 'sex', 'tumor', 'biomarker_1', 'biomarker_2']
@@ -419,6 +439,11 @@ def main():
         missing_value_columns=missing_cols,
         missing_value_fraction=args.missing_value_fraction
     )
+    if args.audit_column:
+        # Audit-only column for the extra_features path: never used to train the model
+        audit_rng = np.random.RandomState(args.random_state + 1)
+        df[args.audit_column] = audit_rng.choice(["north", "south", "centre"], len(df))
+        print(f"Added audit-only column '{args.audit_column}'")
     print(f"Generated {len(df)} samples")
     print(f"Event rate: {df[event_col].mean():.2%}")
     print(f"Median time-to-event: {df[time_col].median():.1f} months")
@@ -445,7 +470,7 @@ def main():
     
     # Step 3: Train survival model
     print("\n[Step 3] Training GradientBoostingSurvivalAnalysis model...")
-    model = train_survival_model(df_train, feature_cols, time_col, event_col)
+    model = train_survival_model(df_train, feature_cols, time_col, event_col, model_type=args.model_type)
     print("Model trained successfully")
     
     # Step 4: Calculate threshold (66th percentile on training set)

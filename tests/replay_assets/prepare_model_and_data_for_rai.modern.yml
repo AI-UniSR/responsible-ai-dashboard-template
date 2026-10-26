@@ -1,0 +1,88 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+# Copy of components/prepare_model_and_data_for_rai/component.yml that runs in the model's environment
+# (rai-replay-modern-test:1), as prediction replay requires. Only `name`, `code` and `environment` differ;
+# tests/unit/test_component_variants.py keeps the rest identical. The own name keeps a registered copy
+# from replacing the default component.
+name: prepare_model_and_data_for_rai_modern
+display_name: "Prepare Model and Data for RAI"
+version: 0.4.0
+type: command
+
+inputs:
+  model_name:
+    type: string
+  model_version:
+    type: integer
+    optional: true
+    description: Model version (optional if model_info_path_input is provided)
+  model_info_path_input:
+    type: uri_folder
+    optional: true
+    description: Alternative to model_version - reads version from model_info.json
+  binary_label_name:
+    type: string
+  time_column:
+    type: string
+    optional: true
+  event_column:
+    type: string
+    optional: true
+  time_horizon:
+    type: integer
+    optional: true
+  train_data:
+    type: mltable
+  test_data:
+    type: mltable
+  extra_features:
+    type: string
+    optional: true
+    default: '[]'
+  test_assets:
+    type: uri_folder
+    optional: true
+    description: Optional folder containing test_assets.json with threshold override
+  remove_missing:
+    type: string
+    optional: true
+    description: Comma-separated list of columns to check for NaN before dropping rows
+  replay_predictions:
+    type: boolean
+    default: false
+    description: >-
+      Opt-in prediction replay (see README). Predictions are computed here and a replay model is
+      registered instead of the wrapped model, so the RAI components never load the model's
+      libraries. Run this step in the model's own environment (a copy of this file with only
+      environment and code changed; a pipeline node cannot override it) and keep
+      use_model_dependency false in the RAI constructor. Counterfactuals, what-if and ICE are not
+      available in this mode.
+
+outputs:
+  train_data_out:
+    type: mltable
+  test_data_out:
+    type: mltable
+  model_info_path:
+    type: string
+
+code: ../../components/prepare_model_and_data_for_rai
+environment: azureml:rai-replay-modern-test:1
+
+command: >-
+  python main.py
+  --model_name ${{inputs.model_name}}
+  $[[--model_version ${{inputs.model_version}}]]
+  $[[--model_info_path_input ${{inputs.model_info_path_input}}]]
+  --binary_label_name ${{inputs.binary_label_name}}
+  $[[--time_column ${{inputs.time_column}}]]
+  $[[--event_column ${{inputs.event_column}}]]
+  $[[--time_horizon ${{inputs.time_horizon}}]]
+  --train_data ${{inputs.train_data}}
+  --test_data ${{inputs.test_data}}
+  --train_data_out ${{outputs.train_data_out}}
+  --test_data_out ${{outputs.test_data_out}}
+  --model_info_path ${{outputs.model_info_path}}
+  $[[--extra_features '${{inputs.extra_features}}']]
+  $[[--test_assets ${{inputs.test_assets}}]]
+  $[[--remove_missing ${{inputs.remove_missing}}]]
+  --replay_predictions ${{inputs.replay_predictions}}

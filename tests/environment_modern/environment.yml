@@ -1,0 +1,8 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: rai-replay-modern-test
+version: "1"
+image: mcr.microsoft.com/azureml/openmpi5.0-ubuntu24.04:20261018.v1
+conda_file: conda_dependencies.yml
+description: >-
+  Modern model stack (Python 3.12, numpy 2, pandas 2, scikit-learn 1.9, scikit-survival 0.28) that the
+  curated RAI environment cannot load. Used by the prediction replay tests.
