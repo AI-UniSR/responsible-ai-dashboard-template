@@ -132,6 +132,77 @@ cd ..
 az ml job create --file e2e-test-surv-pipeline.yml
 ```
 
+## Prediction Replay Tests
+
+These tests cover `replay_predictions` (see the main README, section "Prediction replay"). Every
+command takes the usual `--subscription/--resource-group/--workspace-name` arguments. The YAML files
+name the `clusterprdwe-ogreif` compute; to use another one, add
+`--set compute=azureml:<cluster>` (command jobs) or `--set settings.default_compute=azureml:<cluster>`
+(pipelines).
+
+### Environments (one-time)
+
+```bash
+az ml environment create --file tests/environment/environment.yml          # rai-survival-test:13
+az ml environment create --file tests/environment_modern/environment.yml   # rai-replay-modern-test:1
+```
+
+`rai-replay-modern-test` is a model stack the RAI environment cannot load: Python 3.12, numpy 2,
+pandas 2, scikit-learn 1.9, scikit-survival 0.28, MLflow 2.22.
+
+### Unit tests (`unit/`)
+
+`test_risk_wrapper.py`, `test_replay.py`, `test_main_modes.py` and `test_component_variants.py` need
+no Azure resources (the model registry is faked). `test_main_modes.py` runs `main()` in every mode:
+- with the flag off, it checks that registration and outputs are unchanged;
+- with the flag on, it checks that only the registered model changes.
+
+Run them in both environments:
+
+```bash
+az ml job create --file tests/run-unit-tests-job.yml
+az ml job create --file tests/run-unit-tests-job.yml --set environment=azureml:rai-replay-modern-test:1
+```
+
+### Replay inside the RAI environment (`rai_env/`)
+
+The RAI environment has no pytest, so `check_replay_in_rai_env.py` is a script. It builds replay
+models with the component's code, loads them as the RAI components do, and runs the RAIInsights
+steps of the pipeline: the constructor checks, error analysis, explanations, the gather and
+score-card save/load cycles, and `get_data()`. The data includes missing values and an audit-only
+extra feature. Run it for each RAI environment version your pipelines use:
+
+```bash
+az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml
+az ml job create --file tests/rai_env/check-replay-in-rai-env-job.yml \
+  --set environment=azureml://registries/azureml/environments/responsibleai-tabular/versions/39
+```
+
+### Replay end to end (`e2e-test-replay-pipeline.yml`)
+
+1. `prepare_e2e_survival_assets` runs in `rai-replay-modern-test:1`, with `model_type: gbsa_impute`
+   (median imputer + GBSA, so missing values are kept) and an audit-only `site` column.
+2. `prepare_model_and_data_for_rai` runs in the same environment, with `replay_predictions: true`
+   and `extra_features: '["site"]'`.
+
+Both steps use the copies in `replay_assets/*.modern.yml`. A pipeline node cannot override a
+component's environment (it is accepted but ignored), and `unit/test_component_variants.py` keeps
+the copies in sync with the originals.
+3. The unmodified registry components 0.22.0 run, with `use_model_dependency: false`: constructor,
+   error analysis, explanation, gather, and score card (config in `replay_assets/`).
+4. `check_replay_dashboard` runs in the RAI environment. It asserts that:
+   - the dashboard holds the replay model;
+   - predictions on the reloaded data equal those cached at construction;
+   - the insights and the score card PDF exist;
+   - the predictions were computed with Python 3.12.
+
+```bash
+az ml job create --file tests/e2e-test-replay-pipeline.yml
+```
+
+`e2e-test-surv-pipeline.yml` (above) is the regression test for the default mode. It does not set
+the flag, so it must keep passing unchanged.
+
 ## Troubleshooting
 
 | Issue | Cause | Solution |
