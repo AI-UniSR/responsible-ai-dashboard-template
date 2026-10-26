@@ -1,7 +1,7 @@
 $schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
 name: prepare_model_and_data_for_rai
 display_name: "Prepare Model and Data for RAI"
-version: 0.3.0
+version: 0.4.0
 type: command
 
 inputs:
@@ -42,6 +42,16 @@ inputs:
     type: string
     optional: true
     description: Comma-separated list of columns to check for NaN before dropping rows
+  replay_predictions:
+    type: boolean
+    default: false
+    description: >-
+      Opt-in prediction replay (see README). Predictions are computed here and a replay model is
+      registered instead of the wrapped model, so the RAI components never load the model's
+      libraries. Run this step in the model's own environment (a copy of this file with only
+      environment and code changed; a pipeline node cannot override it) and keep
+      use_model_dependency false in the RAI constructor. Counterfactuals, what-if and ICE are not
+      available in this mode.
 
 outputs:
   train_data_out:
@@ -71,3 +81,4 @@ command: >-
   $[[--extra_features '${{inputs.extra_features}}']]
   $[[--test_assets ${{inputs.test_assets}}]]
   $[[--remove_missing ${{inputs.remove_missing}}]]
+  --replay_predictions ${{inputs.replay_predictions}}

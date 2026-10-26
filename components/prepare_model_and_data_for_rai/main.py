@@ -2,6 +2,10 @@
 This component is used to convert a survival analysis model into a classification model.
 It takes as input a registered survival model (model name and version), training data and test data (optional, training data will be used if test data is not provided).
 It outputs train and test data converted into classification format, and a registered classification model.
+
+With --replay_predictions true (opt-in) the registered model is instead a prediction replay model (see replay.py).
+Predictions are computed here, in the model's own environment, so the RAI components never load the model's
+libraries. Counterfactuals, what-if and ICE are not available in that mode.
 """
 import argparse
 import os
@@ -34,6 +38,15 @@ def parse_json_list(s):
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON list: {e.msg} (line {e.lineno}, col {e.colno})")
 
+def parse_bool(s):
+    # Azure ML passes boolean inputs as "True"/"False"
+    value = str(s).strip().lower()
+    if value in ("true", "1", "yes"):
+        return True
+    if value in ("false", "0", "no"):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean, got {s!r}")
+
 def main():
     parser = argparse.ArgumentParser()
     # --- Model inputs ---
@@ -64,6 +77,11 @@ def main():
     # --- Missing value handling ---
     parser.add_argument(
         "--remove_missing", type=str, help="Comma-separated list of columns to check for NaN before dropping rows. Use '*' or 'all' for all columns.", default=None, required=False
+    )
+    # --- Optional prediction replay (opt-in) ---
+    parser.add_argument(
+        "--replay_predictions", type=parse_bool, default=False, required=False,
+        help="Register a prediction replay model instead of the wrapped model (see replay.py)."
     )
     args = parser.parse_args()
 
@@ -157,14 +175,16 @@ def main():
                 ("selector", selector),
                 ("model", model),
             ])
-            _ , out_model_version = register_model(model, out_model_name, 
-                                                           code_paths=["./risk_wrapper.py"],
-                                                           input_example=df_train[features].iloc[:5,:])
+            if not args.replay_predictions:
+                _ , out_model_version = register_model(model, out_model_name,
+                                                               code_paths=["./risk_wrapper.py"],
+                                                               input_example=df_train[features].iloc[:5,:])
         else:
             # Survival mode without extra features
-            _ , out_model_version = register_model(model, out_model_name, 
-                                                           code_paths=["./risk_wrapper.py"],
-                                                           input_example=df_train[features].iloc[:5,:])
+            if not args.replay_predictions:
+                _ , out_model_version = register_model(model, out_model_name,
+                                                               code_paths=["./risk_wrapper.py"],
+                                                               input_example=df_train[features].iloc[:5,:])
         
     elif args.time_column is None and args.event_column is None and args.time_horizon is None:
         # Classification mode
@@ -188,12 +208,28 @@ def main():
                 model_name=args.model_name,
                 model_version=args.model_version,
                 reference_df=df_train,
-                target_col=args.binary_label_name
+                target_col=args.binary_label_name,
+                pandas_output=args.replay_predictions
             )
-            _ , out_model_version = register_model(model, out_model_name, input_example=df_train[features].iloc[:5,:])
+            if not args.replay_predictions:
+                _ , out_model_version = register_model(model, out_model_name, input_example=df_train[features].iloc[:5,:])
     else:
         raise ValueError("Either provide all of time_column, event_column, time_horizon for survival mode, or none of them for classification mode.")
     
+    # --- Prediction replay (opt-in): register the model's predictions instead of the model ---
+    if args.replay_predictions:
+        from replay import build_and_register_replay_model
+        print("Prediction replay enabled: computing predictions in this environment for the RAI components.")
+        out_model_name, out_model_version = build_and_register_replay_model(
+            model=model,
+            df_train=df_train,
+            df_test=df_test,
+            features=features,
+            target_col=args.binary_label_name,
+            model_name="rai-" + args.model_name + "-replay",
+            source_model=f"{args.model_name}:{args.model_version}",
+        )
+
     # --- Generate model info JSON ---
     generate_model_info_json(
         model_name=out_model_name,

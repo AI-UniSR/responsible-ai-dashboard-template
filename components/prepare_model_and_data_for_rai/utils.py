@@ -156,8 +156,12 @@ def write_filtered_mltable(df, features, target_col, output_dir):
 
 
 
-def build_selector_pipeline(model_name, model_version, reference_df, target_col):
-    """Return a sklearn Pipeline that filters extra columns before model prediction."""
+def build_selector_pipeline(model_name, model_version, reference_df, target_col, pandas_output=False):
+    """Return a sklearn Pipeline that filters extra columns before model prediction.
+
+    With pandas_output=True (used by prediction replay) the model receives a DataFrame with its own
+    column names, as the survival branch does, so models that select columns by name also work.
+    """
     model_uri = f"models:/{model_name}/{model_version}"
     model = mlflow.sklearn.load_model(model_uri)
 
@@ -165,10 +169,18 @@ def build_selector_pipeline(model_name, model_version, reference_df, target_col)
         raise AttributeError("Model has no attribute 'feature_names_in_'.")
 
     used_features = list(model.feature_names_in_)
-    selector = ColumnTransformer(
-        [("keep", "passthrough", used_features)],
-        remainder="drop"
-    )
+    if pandas_output:
+        selector = ColumnTransformer(
+            [("keep", "passthrough", used_features)],
+            remainder="drop",
+            verbose_feature_names_out=False,
+        )
+        selector.set_output(transform="pandas")
+    else:
+        selector = ColumnTransformer(
+            [("keep", "passthrough", used_features)],
+            remainder="drop"
+        )
 
     selector.fit(reference_df.drop(columns=[target_col], errors="ignore"))
 
